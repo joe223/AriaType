@@ -6,11 +6,14 @@ import {
   historyCommands,
   TranscriptionEntry,
   HistoryFilter,
+  textCommands,
+  windowCommands,
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import {
   Search,
   Clock,
+  Copy,
   ChevronLeft,
   ChevronRight,
   X
@@ -37,9 +40,10 @@ function formatRelativeTime(timestamp: number, t: (key: string, options?: Record
 interface HistoryEntryCardProps {
   entry: TranscriptionEntry;
   t: (key: string, options?: Record<string, unknown>) => string;
+  onCopy: (text: string) => void;
 }
 
-function HistoryEntryCard({ entry, t }: HistoryEntryCardProps) {
+function HistoryEntryCard({ entry, t, onCopy }: HistoryEntryCardProps) {
   return (
     <div className="flex items-start justify-between gap-4 py-3 px-2 md:px-3 border-b border-border/40 last:border-0">
       {/* 文本列 (左侧) */}
@@ -50,10 +54,19 @@ function HistoryEntryCard({ entry, t }: HistoryEntryCardProps) {
       </div>
 
       {/* 时间列 (右侧) */}
-      <div className="shrink-0 pt-0.5">
+      <div className="shrink-0 pt-0.5 flex flex-col items-end gap-2">
         <span className="text-[13px] font-medium font-mono tabular-nums tracking-tight text-muted-foreground/50">
           {formatRelativeTime(entry.created_at, t)}
         </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+          onClick={() => onCopy(entry.final_text)}
+        >
+          <Copy className="h-3.5 w-3.5 mr-1" />
+          {t("history.copy")}
+        </Button>
       </div>
     </div>
   );
@@ -152,6 +165,18 @@ export function HistoryPage() {
     setCurrentPage(0);
   };
 
+  const handleCopyEntry = useCallback(
+    async (text: string) => {
+      try {
+        await textCommands.copyToClipboard(text);
+        await windowCommands.showToast(t("history.copied"));
+      } catch (err) {
+        logger.error("failed_to_copy_history_entry", { error: String(err) });
+      }
+    },
+    [t]
+  );
+
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
   const hasNextPage = entries.length === PAGE_SIZE;
   const hasPrevPage = currentPage > 0;
@@ -223,7 +248,7 @@ export function HistoryPage() {
         ) : entries.length > 0 ? (
           <div className="flex flex-col">
             {entries.map((entry) => (
-              <HistoryEntryCard key={entry.id} entry={entry} t={t} />
+              <HistoryEntryCard key={entry.id} entry={entry} t={t} onCopy={handleCopyEntry} />
             ))}
           </div>
         ) : (

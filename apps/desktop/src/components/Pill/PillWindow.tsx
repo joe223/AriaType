@@ -3,11 +3,12 @@ import { motion, AnimatePresence } from "framer-motion";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
+import { X } from "lucide-react";
 import { AudioDots } from "./AudioDots";
 import { SettingsButton } from "./SettingsButton";
 import type { RecordingStatus } from "@/types";
 import { logger } from "@/lib/logger";
-import { settingsCommands, windowCommands, events, type AppSettings } from "@/lib/tauri";
+import { audioCommands, settingsCommands, windowCommands, events, type AppSettings } from "@/lib/tauri";
 import type { RecordingStateEvent } from "@/lib/tauri";
 
 export function PillWindow() {
@@ -91,6 +92,31 @@ export function PillWindow() {
     }
   }, []);
 
+  const cancelRecording = useCallback(async () => {
+    if (status !== "recording") {
+      return;
+    }
+    try {
+      await audioCommands.cancelRecording();
+    } catch (e) {
+      logger.error("failed_to_cancel_recording", { error: String(e) });
+    }
+  }, [status]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || status !== "recording") {
+        return;
+      }
+      event.preventDefault();
+      void cancelRecording();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [cancelRecording, status]);
+
   const handleExitComplete = useCallback(async () => {
     // Only hide the native window when in when_recording mode; never mode is
     // handled entirely by the backend, always mode never hides.
@@ -135,6 +161,20 @@ export function PillWindow() {
               } as React.CSSProperties}
             >
               <AudioDots status={status} audioLevel={audioLevel} hasAudioActivity={hasAudioActivity} />
+              {status === "recording" && (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void cancelRecording();
+                  }}
+                  aria-label={t("common.cancel")}
+                  title={`${t("common.cancel")} (Esc)`}
+                  className="ml-2 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-white opacity-70 hover:opacity-100 transition-opacity duration-100"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              )}
               <SettingsButton />
             </div>
             <AnimatePresence mode="wait">

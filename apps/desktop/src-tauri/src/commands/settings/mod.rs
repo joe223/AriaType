@@ -925,7 +925,45 @@ pub fn register_global_shortcut(app: &AppHandle, hotkey: &str) -> Result<(), Str
                 }
             }
         })
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    // Escape can cancel an in-progress toggle recording without triggering transcription.
+    let cancel_shortcut = Shortcut::new(Modifiers::empty(), Code::Escape);
+    if let Err(e) = app
+        .global_shortcut()
+        .on_shortcut(cancel_shortcut, |app, _shortcut, event| {
+            if event.state != ShortcutState::Pressed {
+                return;
+            }
+
+            let state_result = app.try_state::<AppState>();
+            match state_result {
+                Some(state) => {
+                    if state.hotkey_capture_mode.load(Ordering::SeqCst) {
+                        tracing::debug!("cancel_shortcut_ignored-capture_mode");
+                        return;
+                    }
+
+                    let is_recording = state.is_recording.load(Ordering::SeqCst);
+                    let recording_mode = state.settings.lock().recording_mode.clone();
+                    if recording_mode == "toggle" && is_recording {
+                        match crate::commands::audio::cancel_recording_sync(app.clone()) {
+                            Ok(true) => tracing::info!("recording_cancelled-escape_shortcut"),
+                            Ok(false) => {}
+                            Err(err) => tracing::error!(error = %err, "recording_cancel_failed"),
+                        }
+                    }
+                }
+                None => {
+                    tracing::error!("app_state_unavailable");
+                }
+            }
+        })
+    {
+        tracing::warn!(error = %e, "cancel_shortcut_registration_failed");
+    }
+
+    Ok(())
 }
 
 /// Returns the current process RSS memory in MB, or 0 if unavailable.

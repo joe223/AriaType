@@ -466,6 +466,12 @@ pub async fn stop_recording(
     Ok(output_path)
 }
 
+#[tauri::command]
+#[instrument(skip(app, _state), ret, err)]
+pub async fn cancel_recording(app: AppHandle, _state: State<'_, AppState>) -> Result<bool, String> {
+    cancel_recording_sync(app)
+}
+
 fn await_streaming_task_in_background(task_id: u64, handle: tauri::async_runtime::JoinHandle<()>) {
     tauri::async_runtime::spawn(async move {
         if let Err(e) = handle.await {
@@ -524,6 +530,49 @@ pub fn stop_recording_sync(app: AppHandle) -> Result<Option<String>, String> {
     }
 
     Ok(None)
+}
+
+pub fn cancel_recording_sync(app: AppHandle) -> Result<bool, String> {
+    let state = app.state::<AppState>();
+
+    if !state.is_recording.load(Ordering::SeqCst) {
+        return Ok(false);
+    }
+
+    {
+        let recorder = state.recorder.lock();
+        recorder.stop().map_err(|e| e.to_string())?;
+    }
+
+    let task_id = state.task_counter.load(Ordering::SeqCst);
+
+    state.is_recording.store(false, Ordering::SeqCst);
+    state.is_transcribing.store(false, Ordering::SeqCst);
+    state.recording_start_time.store(0, Ordering::SeqCst);
+
+    if let Some(tx) = state.level_monitor_tx.lock().as_ref() {
+        let _ = tx.send(false);
+    }
+
+    let streaming_state = state.streaming_stt.lock().take();
+    if let Some(stt) = streaming_state {
+        drop(stt.audio_tx);
+        if let Some(handle) = stt.streaming_task.lock().take() {
+            handle.abort();
+        }
+    }
+
+    state.clear_session();
+
+    let _ = app.emit(
+        EventName::RECORDING_STATE_CHANGED,
+        RecordingStateEvent {
+            status: "idle".to_string(),
+            task_id,
+        },
+    );
+    info!(task_id, "recording_cancelled");
+    Ok(true)
 }
 
 async fn run_local_polish(

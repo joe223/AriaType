@@ -2,7 +2,7 @@
 //!
 //! Provides a persistent tray icon in the system status bar with:
 //! - Click to show/hide main settings window
-//! - Context menu with: Show Settings, Toggle Recording, Quit
+//! - Context menu with: Show Settings, Toggle Recording, Cancel Recording, Quit
 //! - Visual indicator for recording state (icon changes)
 
 use tauri::{
@@ -16,6 +16,7 @@ use tracing::{error, info, instrument};
 /// Tray menu item IDs
 pub const MENU_ID_SHOW_SETTINGS: &str = "show-settings";
 pub const MENU_ID_TOGGLE_RECORDING: &str = "toggle-recording";
+pub const MENU_ID_CANCEL_RECORDING: &str = "cancel-recording";
 pub const MENU_ID_QUIT: &str = "quit";
 
 /// Create and setup the system tray icon with menu.
@@ -43,11 +44,28 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
 
+    let cancel_recording = MenuItem::with_id(
+        app,
+        MENU_ID_CANCEL_RECORDING,
+        "Cancel Recording",
+        true,
+        None::<&str>,
+    )?;
+
     let quit = MenuItem::with_id(app, MENU_ID_QUIT, "Quit", true, None::<&str>)?;
 
     let separator = PredefinedMenuItem::separator(app)?;
 
-    let menu = Menu::with_items(app, &[&show_settings, &toggle_recording, &separator, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &show_settings,
+            &toggle_recording,
+            &cancel_recording,
+            &separator,
+            &quit,
+        ],
+    )?;
 
     let mut builder = TrayIconBuilder::with_id("ariatype-tray")
         .icon(tray_icon)
@@ -107,6 +125,9 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         }
         MENU_ID_TOGGLE_RECORDING => {
             toggle_recording(app);
+        }
+        MENU_ID_CANCEL_RECORDING => {
+            cancel_recording(app);
         }
         MENU_ID_QUIT => {
             info!("quit_requested-tray_menu");
@@ -195,6 +216,37 @@ fn toggle_recording(app: &AppHandle) {
             Ok(_) => info!("recording_started-tray"),
             Err(e) => error!(error = %e, "recording_start_failed-tray"),
         }
+    }
+}
+
+/// Cancel recording from tray without transcribing buffered audio.
+fn cancel_recording(app: &AppHandle) {
+    use std::sync::atomic::Ordering;
+
+    let state = match app.try_state::<crate::state::app_state::AppState>() {
+        Some(s) => s,
+        None => {
+            error!("app_state_not_found");
+            return;
+        }
+    };
+
+    let is_recording = state.is_recording.load(Ordering::SeqCst);
+    let recording_mode = state.settings.lock().recording_mode.clone();
+    if !is_recording || recording_mode != "toggle" {
+        info!(
+            is_recording,
+            recording_mode = %recording_mode,
+            "recording_cancel_ignored-tray"
+        );
+        return;
+    }
+
+    info!("recording_cancel_requested-tray");
+    match crate::commands::audio::cancel_recording_sync(app.clone()) {
+        Ok(true) => info!("recording_cancelled-tray"),
+        Ok(false) => info!("recording_cancel_skipped-tray"),
+        Err(e) => error!(error = %e, "recording_cancel_failed-tray"),
     }
 }
 
