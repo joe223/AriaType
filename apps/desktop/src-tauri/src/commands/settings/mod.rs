@@ -928,7 +928,7 @@ pub fn register_global_shortcut(app: &AppHandle, hotkey: &str) -> Result<(), Str
         .map_err(|e| e.to_string())?;
 
     // Escape can cancel an in-progress toggle recording without triggering transcription.
-    let cancel_shortcut = Shortcut::new(Modifiers::empty(), Code::Escape);
+    let cancel_shortcut = Shortcut::new(Some(Modifiers::empty()), Code::Escape);
     if let Err(e) = app
         .global_shortcut()
         .on_shortcut(cancel_shortcut, |app, _shortcut, event| {
