@@ -2,10 +2,24 @@
 
 All notable changes to the desktop application will be documented in this file.
 
-## Unreleased
+## v0.6.1 (2026-05-19)
 
 ### Bug Fixes
 
+- Keep idle tooltips from showing pill body (ad32ae3)
+
+## v0.6.0 (2026-05-19)
+
+### Features
+
+- Verify cloud setup and keep polish output plain text (73a5fb3)
+- Customize pill appearance (6a47ab4)
+- Support deliberate recording finish triggers (a80c22c)
+- Add voice-writing polish templates (9975217)
+
+### Bug Fixes
+
+- Adapt cloud polish timeout for long requests (fea6258)
 - Context aware visual terms (ce46436)
 - Add default value for pill_size field (f027349)
 

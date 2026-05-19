@@ -1,4 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { getIdentifier } from "@tauri-apps/api/app";
+import {
+  autoUpdate,
+  flip,
+  FloatingFocusManager,
+  FloatingPortal,
+  offset,
+  shift,
+  useClick,
+  useDismiss,
+  useFloating,
+  useInteractions,
+  useRole,
+} from "@floating-ui/react";
+import { HexColorInput, HexColorPicker } from "react-colorful";
 import {
   Card,
   CardContent,
@@ -6,6 +21,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -14,6 +30,7 @@ import { systemCommands, settingsCommands } from "@/lib/tauri";
 import { logger } from "@/lib/logger";
 import { analytics } from "@/lib/analytics";
 import { AnalyticsEvents } from "@/lib/events";
+import { showErrorToast } from "@/lib/toast";
 import { useTranslation } from "react-i18next";
 import { supportedLanguages } from "@/i18n";
 import type { PillIndicatorMode, PresetPosition } from "@/types";
@@ -27,13 +44,69 @@ function getLanguageLabel(code: string): string {
   return (langCodes as Record<string, string>)[code] || code;
 }
 
+const DEFAULT_PILL_BACKGROUND_COLOR = "#1d1d1d";
+const DEFAULT_PILL_BACKGROUND_OPACITY = 1;
+
+const PILL_BACKGROUND_COLOR_PRESETS = [
+  { value: "#1d1d1d", label: "dark" },
+  { value: "#26324a", label: "slate" },
+  { value: "#2f3a32", label: "forest" },
+  { value: "#472b39", label: "plum" },
+  { value: "#4a3728", label: "copper" },
+] as const;
+
+type PillBackgroundColorLabel = (typeof PILL_BACKGROUND_COLOR_PRESETS)[number]["label"];
+
+function normalizePillBackgroundColor(color: string | undefined): string {
+  if (!color || !/^#[0-9a-f]{6}$/i.test(color)) {
+    return DEFAULT_PILL_BACKGROUND_COLOR;
+  }
+
+  return color.toLowerCase();
+}
+
+function normalizePillBackgroundOpacity(opacity: number | undefined): number {
+  if (typeof opacity !== "number" || !Number.isFinite(opacity)) {
+    return DEFAULT_PILL_BACKGROUND_OPACITY;
+  }
+
+  return Math.min(1, Math.max(0.2, opacity));
+}
+
 export function GeneralSettings() {
   const { t, i18n } = useTranslation();
   const { settings, updateSetting } = useSettingsContext();
   const [audioDevices, setAudioDevices] = useState<string[]>(["default"]);
   const [isMacOS, setIsMacOS] = useState(false);
+  const [isInHouseBuild, setIsInHouseBuild] = useState(false);
   const [activeTab, setActiveTab] = useState<"general" | "transcription">("general");
   const [availableSubdomains, setAvailableSubdomains] = useState<string[]>([]);
+  const [colorPickerOpen, setColorPickerOpen] = useState(false);
+  const [isClearingCorrectionMemory, setIsClearingCorrectionMemory] = useState(false);
+  const [isOpeningCorrectionMemoryDirectory, setIsOpeningCorrectionMemoryDirectory] = useState(false);
+  const [correctionMemoryCleared, setCorrectionMemoryCleared] = useState(false);
+  const correctionMemoryClearedTimer = useRef<number | undefined>(undefined);
+
+  const { refs: colorPickerRefs, floatingStyles: colorPickerFloatingStyles, context: colorPickerContext } = useFloating({
+    open: colorPickerOpen,
+    onOpenChange: setColorPickerOpen,
+    placement: "bottom-start",
+    whileElementsMounted: autoUpdate,
+    middleware: [
+      offset(8),
+      flip({ padding: 8 }),
+      shift({ padding: 8 }),
+    ],
+  });
+
+  const colorPickerClick = useClick(colorPickerContext);
+  const colorPickerDismiss = useDismiss(colorPickerContext);
+  const colorPickerRole = useRole(colorPickerContext, { role: "dialog" });
+  const { getReferenceProps: getColorPickerReferenceProps, getFloatingProps: getColorPickerFloatingProps } = useInteractions([
+    colorPickerClick,
+    colorPickerDismiss,
+    colorPickerRole,
+  ]);
 
   // Helper functions with static i18n keys (for scanner detection)
   const getPillSizeLabel = (size: number): string => {
@@ -44,6 +117,16 @@ export function GeneralSettings() {
       case 4: return t("general.display.pillSize.large");
       case 5: return t("general.display.pillSize.xlarge");
       default: return t("general.display.pillSize.default");
+    }
+  };
+
+  const getPillBackgroundColorLabel = (label: PillBackgroundColorLabel): string => {
+    switch (label) {
+      case "dark": return t("general.display.pillBackgroundColor.dark");
+      case "slate": return t("general.display.pillBackgroundColor.slate");
+      case "forest": return t("general.display.pillBackgroundColor.forest");
+      case "plum": return t("general.display.pillBackgroundColor.plum");
+      case "copper": return t("general.display.pillBackgroundColor.copper");
     }
   };
 
@@ -72,6 +155,19 @@ export function GeneralSettings() {
     systemCommands.getPlatform().then((platform) => {
       setIsMacOS(platform === "macos");
     }).catch((err: unknown) => logger.error("failed_to_get_platform", { error: String(err) }));
+    getIdentifier()
+      .then((identifier) => {
+        setIsInHouseBuild(identifier.endsWith(".inhouse"));
+      })
+      .catch((err: unknown) => logger.error("failed_to_get_app_identifier", { error: String(err) }));
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (correctionMemoryClearedTimer.current !== undefined) {
+        window.clearTimeout(correctionMemoryClearedTimer.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -113,6 +209,18 @@ export function GeneralSettings() {
   const handlePillSizeChange = async (value: number) => {
     analytics.track(AnalyticsEvents.SETTING_CHANGED, { setting: "pill_size", value: String(value) });
     await updateSetting("pill_size", value);
+  };
+
+  const handlePillBackgroundColorChange = async (value: string) => {
+    const color = normalizePillBackgroundColor(value);
+    analytics.track(AnalyticsEvents.SETTING_CHANGED, { setting: "pill_background_color", value: color });
+    await updateSetting("pill_background_color", color);
+  };
+
+  const handlePillBackgroundOpacityChange = async (value: number) => {
+    const opacity = normalizePillBackgroundOpacity(value);
+    analytics.track(AnalyticsEvents.SETTING_CHANGED, { setting: "pill_background_opacity", value: String(opacity) });
+    await updateSetting("pill_background_opacity", opacity);
   };
 
   const handleAppLanguageChange = async (value: string) => {
@@ -164,6 +272,45 @@ export function GeneralSettings() {
     await updateSetting("window_context_enabled", checked);
   };
 
+  const handleCorrectionMemoryChange = async (checked: boolean) => {
+    analytics.track(AnalyticsEvents.SETTING_CHANGED, { setting: "correction_memory_enabled", value: String(checked) });
+    await updateSetting("correction_memory_enabled", checked);
+  };
+
+  const handleClearCorrectionMemory = async () => {
+    setIsClearingCorrectionMemory(true);
+    try {
+      await settingsCommands.clearCorrectionMemory();
+      analytics.track(AnalyticsEvents.SETTING_CHANGED, { setting: "correction_memory_cleared" });
+      setCorrectionMemoryCleared(true);
+      if (correctionMemoryClearedTimer.current !== undefined) {
+        window.clearTimeout(correctionMemoryClearedTimer.current);
+      }
+      correctionMemoryClearedTimer.current = window.setTimeout(() => {
+        setCorrectionMemoryCleared(false);
+        correctionMemoryClearedTimer.current = undefined;
+      }, 2500);
+    } catch (err) {
+      logger.error("failed_to_clear_correction_memory", { error: String(err) });
+      showErrorToast(t("general.privacy.correctionMemoryClearError"));
+    } finally {
+      setIsClearingCorrectionMemory(false);
+    }
+  };
+
+  const handleOpenCorrectionMemoryDirectory = async () => {
+    setIsOpeningCorrectionMemoryDirectory(true);
+    try {
+      await settingsCommands.openCorrectionMemoryDirectory();
+      analytics.track(AnalyticsEvents.SETTING_CHANGED, { setting: "correction_memory_directory_opened" });
+    } catch (err) {
+      logger.error("failed_to_open_correction_memory_directory", { error: String(err) });
+      showErrorToast(t("general.privacy.correctionMemoryOpenError"));
+    } finally {
+      setIsOpeningCorrectionMemoryDirectory(false);
+    }
+  };
+
   const handleSttLanguageChange = async (value: string) => {
     analytics.track(AnalyticsEvents.SETTING_CHANGED, { setting: "stt_engine_language", value });
     const prompt = WHISPER_LANGUAGE_PROMPTS[value] ?? "";
@@ -194,6 +341,10 @@ export function GeneralSettings() {
   const handleGlossaryChange = async (value: string) => {
     await updateSetting("stt_engine_user_glossary", value);
   };
+
+  const pillBackgroundColor = normalizePillBackgroundColor(settings.pill_background_color);
+  const pillBackgroundOpacity = normalizePillBackgroundOpacity(settings.pill_background_opacity);
+  const pillBackgroundOpacityPercent = `${Math.round(pillBackgroundOpacity * 100)}%`;
 
   return (
     <SettingsPageLayout
@@ -338,6 +489,92 @@ export function GeneralSettings() {
                   </span>
                 </div>
               </div>
+              <div className="space-y-2">
+                <Label>{t("general.display.pillBackgroundColor")}</Label>
+                <p className="text-xs text-muted-foreground">
+                  {t("general.display.pillBackgroundColorDesc")}
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  {PILL_BACKGROUND_COLOR_PRESETS.map((preset) => {
+                    const isSelected = pillBackgroundColor === preset.value;
+                    const label = getPillBackgroundColorLabel(preset.label);
+
+                    return (
+                      <button
+                        key={preset.value}
+                        type="button"
+                        aria-label={label}
+                        title={label}
+                        onClick={() => handlePillBackgroundColorChange(preset.value)}
+                        className={`h-7 w-7 rounded-full border transition-all ${
+                          isSelected
+                            ? "border-foreground ring-2 ring-ring ring-offset-2 ring-offset-background"
+                            : "border-border hover:border-foreground/50"
+                        }`}
+                        style={{ backgroundColor: preset.value }}
+                      />
+                    );
+                  })}
+                  <button
+                    ref={colorPickerRefs.setReference}
+                    type="button"
+                    aria-label={t("general.display.pillBackgroundColor.custom")}
+                    title={t("general.display.pillBackgroundColor.custom")}
+                    className="relative block h-7 w-7 cursor-pointer overflow-hidden rounded-full border border-border transition-all hover:border-foreground/50 data-[state=open]:border-foreground data-[state=open]:ring-2 data-[state=open]:ring-ring data-[state=open]:ring-offset-2 data-[state=open]:ring-offset-background"
+                    style={{ backgroundColor: pillBackgroundColor }}
+                    data-state={colorPickerOpen ? "open" : "closed"}
+                    {...getColorPickerReferenceProps()}
+                  >
+                    <span className="absolute inset-1 rounded-full border border-background/80" />
+                  </button>
+                  {colorPickerOpen && (
+                    <FloatingPortal>
+                      <FloatingFocusManager context={colorPickerContext} modal={false}>
+                        <div
+                          ref={colorPickerRefs.setFloating}
+                          style={colorPickerFloatingStyles}
+                          className="z-[9999] w-56 rounded-2xl border border-border bg-card p-3 shadow-lg outline-none"
+                          {...getColorPickerFloatingProps()}
+                        >
+                          <HexColorPicker
+                            color={pillBackgroundColor}
+                            onChange={handlePillBackgroundColorChange}
+                            className="!h-36 !w-full"
+                          />
+                          <HexColorInput
+                            prefixed
+                            color={pillBackgroundColor}
+                            onChange={handlePillBackgroundColorChange}
+                            className="mt-3 h-9 w-full rounded-2xl border border-border bg-background px-3 py-2 text-sm font-mono text-foreground outline-none transition-colors focus-visible:border-primary"
+                          />
+                        </div>
+                      </FloatingFocusManager>
+                    </FloatingPortal>
+                  )}
+                  <span className="text-xs font-mono text-muted-foreground">
+                    {pillBackgroundColor.toUpperCase()}
+                  </span>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>{t("general.display.pillBackgroundOpacity")}</Label>
+                <p className="text-xs text-muted-foreground">
+                  {t("general.display.pillBackgroundOpacityDesc")}
+                </p>
+                <div className="flex items-center gap-3">
+                  <Slider
+                    min={0.2}
+                    max={1}
+                    step={0.05}
+                    value={pillBackgroundOpacity}
+                    onChange={(e) => handlePillBackgroundOpacityChange(Number(e.target.value))}
+                    className="w-24"
+                  />
+                  <span className="w-10 text-xs text-muted-foreground">
+                    {pillBackgroundOpacityPercent}
+                  </span>
+                </div>
+              </div>
               <div className="space-y-4">
                 <div className="text-sm font-medium">{t("general.display.indicatorMode")}</div>
                 <MultiSwitch
@@ -374,6 +611,59 @@ export function GeneralSettings() {
                   onCheckedChange={handleAnalyticsChange}
                 />
               </div>
+              <div className="flex items-center justify-between space-x-4">
+                <div>
+                  <Label htmlFor="correction-memory-toggle">
+                    {t("general.privacy.correctionMemory")}
+                  </Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {t("general.privacy.correctionMemoryDesc")}
+                  </p>
+                </div>
+                <Switch
+                  id="correction-memory-toggle"
+                  checked={settings.correction_memory_enabled ?? true}
+                  onCheckedChange={handleCorrectionMemoryChange}
+                />
+              </div>
+              <div className="flex items-center justify-between space-x-4">
+                <div>
+                  <Label>{t("general.privacy.correctionMemoryClear")}</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {t("general.privacy.correctionMemoryClearDesc")}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={isClearingCorrectionMemory}
+                  onClick={handleClearCorrectionMemory}
+                >
+                  {correctionMemoryCleared
+                    ? t("general.privacy.correctionMemoryCleared")
+                    : t("general.privacy.correctionMemoryClearAction")}
+                </Button>
+              </div>
+              {isInHouseBuild && (
+                <div className="flex items-center justify-between space-x-4">
+                  <div>
+                    <Label>{t("general.privacy.correctionMemoryOpen")}</Label>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {t("general.privacy.correctionMemoryOpenDesc")}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={isOpeningCorrectionMemoryDirectory}
+                    onClick={handleOpenCorrectionMemoryDirectory}
+                  >
+                    {t("general.privacy.correctionMemoryOpenAction")}
+                  </Button>
+                </div>
+              )}
             </CardContent>
           </Card>
         </>

@@ -138,14 +138,46 @@ async fn test_openai_polish_request_format() {
 }
 
 #[tokio::test]
-async fn test_cloud_polish_times_out_after_five_seconds() {
+async fn test_openai_connection_check_uses_configured_endpoint() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(header("Authorization", "Bearer test_openai_api_key"))
+        .and(header("Content-Type", "application/json"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{
+                "message": {"content": "ok"}
+            }]
+        })))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let config = CloudProviderConfig {
+        provider_type: "openai".to_string(),
+        api_key: "test_openai_api_key".to_string(),
+        base_url: format!("{}/v1/chat/completions", mock_server.uri()),
+        model: "gpt-4o-mini".to_string(),
+        enable_thinking: false,
+    };
+
+    let engine = CloudPolishEngine::new(config);
+    engine
+        .check_connection()
+        .await
+        .expect("connection check should use the configured endpoint");
+}
+
+#[tokio::test]
+async fn test_short_cloud_polish_times_out_after_core_prompt_timeout() {
     let mock_server = MockServer::start().await;
 
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_delay(Duration::from_secs(6))
+                .set_delay(Duration::from_secs(11))
                 .set_body_json(serde_json::json!({
                     "choices": [{
                         "message": {"content": "Too late"}
@@ -173,13 +205,54 @@ async fn test_cloud_polish_times_out_after_five_seconds() {
     let err = engine
         .polish(request)
         .await
-        .expect_err("cloud polish should time out after 5 seconds");
+        .expect_err("cloud polish should time out at the bounded short-request timeout");
 
     assert_eq!(
         err,
         format!(
-            "Cloud polish request timed out after 5s during HTTP request (provider=openai, model=gpt-4o-mini, url={}/v1/chat/completions)",
+            "Cloud polish request timed out after 10s during HTTP request (provider=openai, model=gpt-4o-mini, url={}/v1/chat/completions)",
             mock_server.uri()
         )
     );
+}
+
+#[tokio::test]
+async fn test_long_cloud_polish_can_complete_after_five_seconds() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(6))
+                .set_body_json(serde_json::json!({
+                    "choices": [{
+                        "message": {"content": "Delayed long polish result"}
+                    }]
+                })),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let config = CloudProviderConfig {
+        provider_type: "openai".to_string(),
+        api_key: "test_openai_api_key".to_string(),
+        base_url: format!("{}/v1/chat/completions", mock_server.uri()),
+        model: "gpt-4o-mini".to_string(),
+        enable_thinking: false,
+    };
+
+    let engine = CloudPolishEngine::new(config);
+    let request = PolishRequest::new(
+        "Long user text ".repeat(140),
+        "System instruction here".to_string(),
+        "en".to_string(),
+    );
+
+    let result = engine
+        .polish(request)
+        .await
+        .expect("long cloud polish should get a bounded timeout above 5 seconds");
+
+    assert_eq!(result.text, "Delayed long polish result");
 }
