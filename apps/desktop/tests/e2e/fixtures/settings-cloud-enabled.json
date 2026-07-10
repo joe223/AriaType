@@ -1,7 +1,7 @@
 {
   "shortcut_profiles": {
     "dictate": {
-      "hotkey": "Cmd+Slash",
+      "hotkey": "Cmd+Dot",
       "trigger_mode": "hold",
       "action": { "Record": { "polish_template_id": null } }
     },

@@ -19,17 +19,16 @@ Two profiles with platform-native default hotkeys:
 
 | Profile | Hotkey | Behavior |
 |---------|--------|----------|
-| Dictate (macOS) | `Cmd+Slash` | Raw transcription, no polish |
+| Dictate (macOS) | `Cmd+Dot` | Raw transcription, no polish |
 | Riff (macOS) | `Opt+Slash` | Transcription with polish template |
-| Dictate (Windows/Linux) | `Ctrl+Slash` | Raw transcription, no polish |
+| Dictate (Windows/Linux) | `Ctrl+Dot` | Raw transcription, no polish |
 | Riff (Windows/Linux) | `Alt+Slash` | Transcription with polish template |
 
-**Why Slash-based shortcuts:**
-- `/` is rarely used as a system shortcut key
-- Easy to press with one hand
-- Different modifiers distinguish the two modes
+**Why these defaults:**
+- Dictate uses `.` to avoid the common `Cmd/Ctrl+/` comment shortcut in developer tools
+- Both shortcuts are easy to press with one hand
+- Different modifiers and keys distinguish the two modes
 - Windows avoids the Win key by default because the shell may reserve it
-- Both use the same key (`/`) for muscle memory consistency
 
 ## Trigger Modes
 

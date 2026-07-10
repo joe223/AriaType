@@ -71,10 +71,14 @@ impl ShortcutProfilesMap {
 }
 
 pub fn default_dictate_hotkey() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "Cmd+Slash"
+    default_dictate_hotkey_for_platform(cfg!(target_os = "macos"))
+}
+
+fn default_dictate_hotkey_for_platform(is_macos: bool) -> &'static str {
+    if is_macos {
+        "Cmd+Dot"
     } else {
-        "Ctrl+Slash"
+        "Ctrl+Dot"
     }
 }
 
@@ -243,6 +247,12 @@ mod tests {
                 assert!(polish_template_id.is_none());
             }
         }
+    }
+
+    #[test]
+    fn default_dictate_uses_dot_on_every_platform() {
+        assert_eq!(default_dictate_hotkey_for_platform(true), "Cmd+Dot");
+        assert_eq!(default_dictate_hotkey_for_platform(false), "Ctrl+Dot");
     }
 
     #[test]

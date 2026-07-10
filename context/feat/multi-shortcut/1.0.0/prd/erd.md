@@ -77,7 +77,7 @@ The async recording task reads the resolved template_id directly. Pipeline doesn
 │─────────────────────│
 │ recording_mode: Str  │  (global, unchanged)
 │ shortcut_profiles:   │  (NEW: map structure)
-│   dictate: Profile   │  Cmd+Slash, no polish
+│   dictate: Profile   │  Cmd+Dot, no polish
 │   chat: Profile      │  Opt+Slash, default template
 │   custom?: Profile   │  (optional, max 1)
 │ ...                  │
@@ -86,7 +86,7 @@ The async recording task reads the resolved template_id directly. Pipeline doesn
 ┌─────────────────────┐
 │  ShortcutProfile     │
 │─────────────────────│
-│ hotkey: String       │  "Cmd+Slash", "Opt+Slash"
+│ hotkey: String       │  "Cmd+Dot", "Opt+Slash"
 │ action: ShortcutAction│
 └────────┬────────────┘
          │
@@ -159,7 +159,7 @@ enum ShortcutAction {
 
 | Profile | Hotkey | Template |
 |---------|--------|----------|
-| dictate | `Cmd+Slash` | None (no polish) |
+| dictate | `Cmd+Dot` | None (no polish) |
 | chat | `Opt+Slash` | `filler` |
 
 ### PreparedRecordingStart Extension
@@ -249,7 +249,7 @@ Migration logic:
 ## Acceptance Criteria
 
 1. **Migration preserved**: Existing hotkey → dictate profile
-2. **Two default profiles work**: Cmd+Slash → dictate (no polish), Opt+Slash → chat (polish with filler)
+2. **Two default profiles work**: Cmd+Dot → dictate (no polish), Opt+Slash → chat (polish with filler)
 3. **Custom profile optional**: Can create/delete one custom profile
 4. **Template per-profile**: Each profile picks its polish template
 5. **Hotkey uniqueness**: Same hotkey cannot be assigned to multiple profiles
@@ -264,7 +264,7 @@ Migration logic:
 
 ```gherkin
 Given fresh install with default settings
-When user presses Cmd+Slash
+When user presses Cmd+Dot
 Then recording starts with no polish
 When user presses Opt+Slash
 Then recording starts with polish using filler template + global provider
@@ -293,8 +293,8 @@ Then recording uses formal template
 ### Scenario: Hotkey conflict rejected
 
 ```gherkin
-Given dictate.hotkey="Cmd+Slash"
-When user tries to set chat.hotkey="Cmd+Slash"
+Given dictate.hotkey="Cmd+Dot"
+When user tries to set chat.hotkey="Cmd+Dot"
 Then error "hotkey_conflict:dictate"
 And chat profile unchanged
 ```
@@ -338,7 +338,7 @@ pnpm --filter @ariatype/shared typecheck
 
 ### Manual
 
-1. Fresh install → verify Cmd+Slash and Opt+Slash work
+1. Fresh install → verify Cmd+Dot and Opt+Slash work
 2. Migration from old version → verify hotkey preserved in dictate
 3. Create custom profile → verify third hotkey works
 4. Delete custom → verify removed

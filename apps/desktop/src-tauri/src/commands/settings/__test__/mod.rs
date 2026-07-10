@@ -143,7 +143,7 @@ fn migrate_array_profiles_copies_global_recording_mode_into_existing_profiles() 
 }
 
 #[test]
-fn migrate_platform_shortcut_defaults_rewrites_untouched_mac_defaults_on_windows() {
+fn migrate_platform_shortcut_defaults_rewrites_legacy_defaults_on_windows() {
     let mut json = json!({
         "shortcut_profiles": {
             "dictate": {
@@ -167,7 +167,7 @@ fn migrate_platform_shortcut_defaults_rewrites_untouched_mac_defaults_on_windows
     let migrated = migrate_platform_shortcut_defaults_for_test(&mut json, false);
 
     assert!(migrated);
-    assert_eq!(json["shortcut_profiles"]["dictate"]["hotkey"], "Ctrl+Slash");
+    assert_eq!(json["shortcut_profiles"]["dictate"]["hotkey"], "Ctrl+Dot");
     assert_eq!(json["shortcut_profiles"]["riff"]["hotkey"], "Alt+Slash");
     assert_eq!(
         json["shortcut_profiles"]["custom"]["hotkey"],
@@ -176,29 +176,33 @@ fn migrate_platform_shortcut_defaults_rewrites_untouched_mac_defaults_on_windows
 }
 
 #[test]
-fn migrate_platform_shortcut_defaults_keeps_macos_and_customized_values() {
+fn migrate_platform_shortcut_defaults_rewrites_legacy_default_on_macos() {
     let mut mac_json = json!({
         "shortcut_profiles": {
             "dictate": { "hotkey": "Cmd+Slash" },
             "riff": { "hotkey": "Opt+Slash" }
         }
     });
+
+    assert!(migrate_platform_shortcut_defaults_for_test(
+        &mut mac_json,
+        true
+    ));
+    assert_eq!(
+        mac_json["shortcut_profiles"]["dictate"]["hotkey"],
+        "Cmd+Dot"
+    );
+    assert_eq!(mac_json["shortcut_profiles"]["riff"]["hotkey"], "Opt+Slash");
+}
+
+#[test]
+fn migrate_platform_shortcut_defaults_keeps_customized_values() {
     let mut customized_json = json!({
         "shortcut_profiles": {
             "dictate": { "hotkey": "Shift+Space" },
             "riff": { "hotkey": "Ctrl+Space" }
         }
     });
-
-    assert!(!migrate_platform_shortcut_defaults_for_test(
-        &mut mac_json,
-        true
-    ));
-    assert_eq!(
-        mac_json["shortcut_profiles"]["dictate"]["hotkey"],
-        "Cmd+Slash"
-    );
-    assert_eq!(mac_json["shortcut_profiles"]["riff"]["hotkey"], "Opt+Slash");
 
     assert!(!migrate_platform_shortcut_defaults_for_test(
         &mut customized_json,
@@ -212,6 +216,22 @@ fn migrate_platform_shortcut_defaults_keeps_macos_and_customized_values() {
         customized_json["shortcut_profiles"]["riff"]["hotkey"],
         "Ctrl+Space"
     );
+}
+
+#[test]
+fn migrate_platform_shortcut_defaults_rewrites_previous_windows_default() {
+    let mut json = json!({
+        "shortcut_profiles": {
+            "dictate": { "hotkey": "Ctrl+Slash" },
+            "riff": { "hotkey": "Alt+Slash" }
+        }
+    });
+
+    assert!(migrate_platform_shortcut_defaults_for_test(
+        &mut json, false
+    ));
+    assert_eq!(json["shortcut_profiles"]["dictate"]["hotkey"], "Ctrl+Dot");
+    assert_eq!(json["shortcut_profiles"]["riff"]["hotkey"], "Alt+Slash");
 }
 
 #[test]

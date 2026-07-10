@@ -89,6 +89,7 @@ const BASE_HOTKEY_LABELS: Record<string, string> = {
   quote: "'",
   backquote: "`",
   comma: ",",
+  dot: ".",
   period: ".",
   slash: "/",
   numlock: "Num",

@@ -40,7 +40,7 @@ fn test_e2e_audio_system_functions() {
 fn test_e2e_settings_default() {
     let settings = ariatype_lib::commands::settings::AppSettings::default();
 
-    assert_eq!(settings.shortcut_profiles.dictate.hotkey, "Cmd+Slash");
+    assert_eq!(settings.shortcut_profiles.dictate.hotkey, "Cmd+Dot");
     assert_eq!(settings.shortcut_profiles.riff.hotkey, "Opt+Slash");
     assert!(settings.shortcut_profiles.custom.is_none());
     assert_eq!(settings.model, "whisper-base");
@@ -373,7 +373,7 @@ mod shortcut_profiles {
         let settings = AppSettings::default();
         let profiles = &settings.shortcut_profiles;
 
-        assert_eq!(profiles.dictate.hotkey, "Cmd+Slash");
+        assert_eq!(profiles.dictate.hotkey, "Cmd+Dot");
         assert_eq!(profiles.riff.hotkey, "Opt+Slash");
         assert!(profiles.custom.is_none());
     }
@@ -470,7 +470,7 @@ mod shortcut_profiles {
     #[test]
     fn settings_get_dictate_hotkey() {
         let settings = AppSettings::default();
-        assert_eq!(settings.get_dictate_hotkey(), "Cmd+Slash");
+        assert_eq!(settings.get_dictate_hotkey(), "Cmd+Dot");
     }
 
     #[test]

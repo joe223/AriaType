@@ -490,6 +490,18 @@ mod tests {
     }
 
     #[test]
+    fn default_dictate_dot_binding_matches_key_event() {
+        let pattern = parse_hotkey_pattern("Cmd+Dot").unwrap();
+        let state = ModifierState {
+            cmd_left: true,
+            ..ModifierState::default()
+        };
+
+        assert!(pattern_matches_state(&pattern, &state, Some("Dot")));
+        assert!(!pattern_matches_state(&pattern, &state, Some("Slash")));
+    }
+
+    #[test]
     fn side_specific_binding_rejects_wrong_side() {
         let pattern = parse_hotkey_pattern("CmdRight+Slash").unwrap();
 

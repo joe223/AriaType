@@ -849,10 +849,6 @@ fn migrate_platform_shortcut_defaults_for_platform(
     json: &mut serde_json::Value,
     is_macos: bool,
 ) -> bool {
-    if is_macos {
-        return false;
-    }
-
     let Some(profiles) = json
         .get_mut("shortcut_profiles")
         .and_then(serde_json::Value::as_object_mut)
@@ -861,8 +857,13 @@ fn migrate_platform_shortcut_defaults_for_platform(
     };
 
     let mut migrated = false;
-    migrated |= migrate_profile_hotkey(profiles, "dictate", "Cmd+Slash", "Ctrl+Slash");
-    migrated |= migrate_profile_hotkey(profiles, "riff", "Opt+Slash", "Alt+Slash");
+    if is_macos {
+        migrated |= migrate_profile_hotkey(profiles, "dictate", "Cmd+Slash", "Cmd+Dot");
+    } else {
+        migrated |= migrate_profile_hotkey(profiles, "dictate", "Cmd+Slash", "Ctrl+Dot");
+        migrated |= migrate_profile_hotkey(profiles, "dictate", "Ctrl+Slash", "Ctrl+Dot");
+        migrated |= migrate_profile_hotkey(profiles, "riff", "Opt+Slash", "Alt+Slash");
+    }
 
     if migrated {
         tracing::info!("shortcut_profiles_migrated-platform_defaults");

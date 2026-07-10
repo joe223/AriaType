@@ -58,6 +58,7 @@ describe("formatHotkey", () => {
     ["ctrl+enter", "Ctrl+↵"],
     ["ctrl+escape", "Ctrl+Esc"],
     ["ctrl+arrowup", "Ctrl+↑"],
+    ["cmd+dot", "⌘+."],
     // Slash - direct symbol
     ["slash", "/"],
     ["ctrl+slash", "Ctrl+/"],
@@ -88,6 +89,7 @@ describe("formatHotkey", () => {
     ["opt+slash", "Alt+/"],
     ["alt+slash", "Alt+/"],
     ["optright+b", "RAlt+B"],
+    ["ctrl+dot", "Ctrl+."],
     ["ctrl+slash", "Ctrl+/"],
   ])("formats Windows hotkey %s as %s", (input, expected) => {
     expect(formatHotkeyForPlatform(input, "windows")).toBe(expected);

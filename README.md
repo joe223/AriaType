@@ -136,7 +136,7 @@ It is built around the current app, the current field, and the current cursor. W
 4. Speak naturally.
 5. Release and the text appears at the cursor.
 
-By default, `Cmd + /` starts raw dictation, and `Opt + /` inserts polished output. You can change the shortcuts in settings.
+By default, `Cmd + .` starts raw dictation, and `Opt + /` inserts polished output. You can change the shortcuts in settings.
 
 ## Privacy And Permissions
 

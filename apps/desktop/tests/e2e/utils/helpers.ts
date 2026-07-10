@@ -75,7 +75,7 @@ export async function openRouteWithOnboarding(
 
 export async function seedDefaultShortcutProfiles(page: E2EPage): Promise<void> {
   const dictateProfile: ShortcutProfilePayload = {
-    hotkey: 'Cmd+Slash',
+    hotkey: 'Cmd+Dot',
     trigger_mode: 'hold',
     action: { Record: { polish_template_id: null } },
   };
