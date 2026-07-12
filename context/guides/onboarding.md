@@ -63,8 +63,8 @@ Package dependency: packages/shared/ → apps/desktop/src/ → apps/desktop/src-
 git clone https://github.com/joe223/AriaType.git
 cd AriaType
 
-# 2. Install dependencies
-pnpm install
+# 2. Install dependencies with the repository-pinned pnpm version
+corepack pnpm install
 
 # 3. Start development server
 pnpm --filter @ariatype/desktop tauri:dev
@@ -77,6 +77,10 @@ pnpm --filter @ariatype/desktop build
 ```
 
 **Detailed setup**: See [`apps/desktop/CONTRIBUTING.md`](../../apps/desktop/CONTRIBUTING.md) for full development environment configuration.
+
+Use `corepack pnpm` for dependency installation and lockfile updates. The root
+`packageManager` field pins pnpm 8.15.0; an unpinned global pnpm must not
+regenerate this repository's version 6 lockfile.
 
 ### Desktop Dev Variant Notes
 

@@ -41,6 +41,12 @@ A plan is only completed when all implementation units are closed, verification 
 | [sherpa-onnx STT Engine Refactor](./completed/2026-04-08-001-refactor-sherpa-onnx-stt-engine.md) | refactor | 2026-04-08 |
 | [Audio Command Boundary Refactor](./completed/2026-04-13-003-refactor-audio-command-boundaries-plan.md) | refactor | 2026-04-13 |
 | [Startup Permission Logging Architecture](./completed/2026-04-14-006-startup-permission-logging-architecture-plan.md) | fix | 2026-04-14 |
+| [Settings Transfer](./completed/2026-07-10-001-feat-settings-transfer-plan.md) | feat | 2026-07-10 |
+| [Fix pnpm Lifecycle Installation](./completed/2026-07-11-001-fix-pnpm-install-plan.md) | fix | 2026-07-11 |
+| [Fix Settings Export Save Dialog](./completed/2026-07-11-002-fix-settings-export-save-dialog-plan.md) | fix | 2026-07-11 |
+| [Fix Settings Import Picker Crash](./completed/2026-07-12-001-fix-settings-import-picker-crash-plan.md) | fix | 2026-07-12 |
+| [Fix Settings Import Development Relaunch](./completed/2026-07-12-002-fix-settings-import-dev-relaunch-plan.md) | fix | 2026-07-12 |
+| [Fix Settings Transfer Full-Fidelity Backup](./completed/2026-07-12-003-fix-settings-transfer-full-fidelity-backup-plan.md) | fix | 2026-07-12 |
 
 ## Provider API Reference
 

@@ -24,7 +24,7 @@
 
 ```bash
 # From repository root
-pnpm install
+corepack pnpm install
 
 # Start development server
 pnpm --filter @ariatype/website dev

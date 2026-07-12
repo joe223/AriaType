@@ -32,7 +32,14 @@ Feature specs are versioned delivery contracts. Each spec at `context/feat/[name
 
 ## Completed Features
 
-(None yet)
+| Feature | Version | Status | Spec |
+|---------|---------|--------|------|
+| Workspace Dependency Installation | 0.1.0 | Completed | [erd.md](./workspace-dependency-install/0.1.0/prd/erd.md) |
+| Settings Transfer | 0.1.0 | Completed | [erd.md](./settings-transfer/0.1.0/prd/erd.md) |
+| Settings Transfer Save Destination | 0.1.1 | Completed | [erd.md](./settings-transfer/0.1.1/prd/erd.md) |
+| Settings Transfer Native Import Picker | 0.1.2 | Completed | [erd.md](./settings-transfer/0.1.2/prd/erd.md) |
+| Settings Transfer Development Restart Safety | 0.1.3 | Completed | [erd.md](./settings-transfer/0.1.3/prd/erd.md) |
+| Settings Transfer Full-Fidelity Raw Backup | 0.1.4 | Completed | [erd.md](./settings-transfer/0.1.4/prd/erd.md) |
 
 ## Spec Format
 

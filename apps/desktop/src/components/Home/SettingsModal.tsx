@@ -36,6 +36,7 @@ import {
   Navigation,
   type NavigationItemConfig,
 } from "./NavigationItem";
+import { SettingsTransferMenu } from "./SettingsTransferMenu";
 
 export type SettingsModalSection =
   | "basics"
@@ -219,11 +220,14 @@ export function SettingsModal({
               {activeConfig.description}
             </p>
           </div>
-          <Dialog.Close asChild>
-            <ModalCloseButton
-              aria-label={t("settingsModal.close")}
-            />
-          </Dialog.Close>
+          <div className="flex shrink-0 items-center gap-1">
+            <SettingsTransferMenu />
+            <Dialog.Close asChild>
+              <ModalCloseButton
+                aria-label={t("settingsModal.close")}
+              />
+            </Dialog.Close>
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-7 py-5">
           {content}

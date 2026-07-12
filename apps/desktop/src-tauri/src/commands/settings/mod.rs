@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tracing::{info, warn};
@@ -11,6 +11,8 @@ use crate::events::EventName;
 use crate::shortcut::ShortcutProfilesMap;
 use crate::state::app_state::AppState;
 use crate::utils::AppPaths;
+
+pub(crate) mod transfer;
 
 /// Cloud provider configuration for polish
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -935,54 +937,78 @@ fn profile_trigger_mode(profile_key: &str, legacy_recording_mode: Option<&str>) 
 
 pub fn load_settings_from_disk() -> AppSettings {
     let path = get_settings_path();
-    if path.exists() {
-        if let Ok(json) = fs::read_to_string(&path) {
-            let mut json_value: serde_json::Value = match serde_json::from_str(&json) {
-                Ok(v) => v,
-                Err(_) => match serde_json::from_str::<AppSettings>(&json) {
-                    Ok(settings) => {
-                        tracing::info!(path = %path.display(), "settings_loaded");
-                        return settings;
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "settings_parse_failed");
-                        return AppSettings::default();
-                    }
-                },
-            };
+    let recovery_failed = match transfer::recover_interrupted_settings_write(&path) {
+        Ok(()) => false,
+        Err(error) => {
+            tracing::warn!(error = %error, "settings_recovery_failed");
+            true
+        }
+    };
 
-            let migrated_cloud = migrate_cloud_settings(&mut json_value);
-            let migrated_model = validate_model_name(&mut json_value);
-            let migrated_profiles = migrate_to_profiles_map(&mut json_value);
-            let migrated_platform_shortcuts = migrate_platform_shortcut_defaults(&mut json_value);
-            let migrated_window_context = migrate_window_context_enabled(&mut json_value);
-            let migrated = migrated_cloud
-                || migrated_model
-                || migrated_profiles
-                || migrated_platform_shortcuts
-                || migrated_window_context;
+    if let Some(settings) = load_settings_from_path(&path) {
+        return settings;
+    }
 
-            match serde_json::from_value::<AppSettings>(json_value.clone()) {
-                Ok(settings) => {
-                    tracing::info!(path = %path.display(), migrated = migrated, "settings_loaded-migrated");
+    if recovery_failed {
+        let previous_path = transfer::previous_settings_path(&path);
+        if let Some(settings) = load_settings_from_path(&previous_path) {
+            tracing::warn!("settings_loaded_from_recovery_file");
+            return settings;
+        }
+    }
 
-                    if migrated {
-                        if let Ok(pretty_json) = serde_json::to_string_pretty(&settings) {
-                            let _ = fs::write(&path, pretty_json);
-                        }
-                    }
+    tracing::info!(path = %path.display(), "settings_not_found");
+    AppSettings::default()
+}
 
-                    return settings;
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "settings_parse_failed")
+fn load_settings_from_path(path: &Path) -> Option<AppSettings> {
+    if !path.exists() {
+        return None;
+    }
+
+    let json = match fs::read_to_string(path) {
+        Ok(json) => json,
+        Err(error) => {
+            tracing::warn!(error = %error, path = %path.display(), "settings_read_failed");
+            return None;
+        }
+    };
+    let mut json_value: serde_json::Value = match serde_json::from_str(&json) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(error = %error, "settings_parse_failed");
+            return None;
+        }
+    };
+
+    let migrated_cloud = migrate_cloud_settings(&mut json_value);
+    let migrated_model = validate_model_name(&mut json_value);
+    let migrated_profiles = migrate_to_profiles_map(&mut json_value);
+    let migrated_platform_shortcuts = migrate_platform_shortcut_defaults(&mut json_value);
+    let migrated_window_context = migrate_window_context_enabled(&mut json_value);
+    let migrated = migrated_cloud
+        || migrated_model
+        || migrated_profiles
+        || migrated_platform_shortcuts
+        || migrated_window_context;
+
+    match serde_json::from_value::<AppSettings>(json_value) {
+        Ok(settings) => {
+            tracing::info!(path = %path.display(), migrated = migrated, "settings_loaded-migrated");
+
+            if migrated {
+                if let Ok(pretty_json) = serde_json::to_string_pretty(&settings) {
+                    let _ = fs::write(path, pretty_json);
                 }
             }
+
+            Some(settings)
         }
-    } else {
-        tracing::info!(path = %path.display(), "settings_not_found");
+        Err(error) => {
+            tracing::warn!(error = %error, "settings_parse_failed");
+            None
+        }
     }
-    AppSettings::default()
 }
 
 #[tauri::command]

@@ -113,6 +113,17 @@ Versioned feature specs with verification status. Each lives under `feat/<name>/
 | [Ghost-Action](./feat/ghost-action/0.1.0/prd/erd.md) | 0.1.0 | Draft | macOS computer-use via Ghost OS MCP server |
 | [Ghost-Language](./feat/ghost-language/0.1.0/prd/erd.md) | 0.1.0 | Draft | Language habit learning for STT/Polish personalization |
 
+### Completed
+
+| Feature | Version | Status |
+|---------|---------|--------|
+| [Workspace Dependency Installation](./feat/workspace-dependency-install/0.1.0/prd/erd.md) | 0.1.0 | Completed |
+| [Settings Transfer](./feat/settings-transfer/0.1.0/prd/erd.md) | 0.1.0 | Completed |
+| [Settings Transfer Save Destination](./feat/settings-transfer/0.1.1/prd/erd.md) | 0.1.1 | Completed |
+| [Settings Transfer Native Import Picker](./feat/settings-transfer/0.1.2/prd/erd.md) | 0.1.2 | Completed |
+| [Settings Transfer Development Restart Safety](./feat/settings-transfer/0.1.3/prd/erd.md) | 0.1.3 | Completed |
+| [Settings Transfer Full-Fidelity Raw Backup](./feat/settings-transfer/0.1.4/prd/erd.md) | 0.1.4 | Completed |
+
 ---
 
 ## Plans

@@ -26,7 +26,7 @@
 
 ```bash
 # From repository root
-pnpm install
+corepack pnpm install
 
 # Start development server
 pnpm --filter @ariatype/desktop tauri:dev
@@ -40,6 +40,9 @@ pnpm --filter @ariatype/desktop tauri:build:mac
 # Build full application (Windows)
 pnpm --filter @ariatype/desktop tauri:build:win
 ```
+
+Use `corepack pnpm` for dependency installation and lockfile updates so the
+root `packageManager` pin (`pnpm@8.15.0`) is honored.
 
 ### Dev / Inhouse Build Conventions
 

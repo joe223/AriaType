@@ -230,6 +230,7 @@ pub fn run() {
         .plugin(tauri_plugin_aptabase::Builder::new("A-US-3957940978").build())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -269,6 +270,9 @@ pub fn run() {
             text::restore_clipboard,
             settings::get_settings,
             settings::update_settings,
+            settings::transfer::export_settings,
+            settings::transfer::select_settings_import,
+            settings::transfer::import_settings,
             settings::get_glossary_content,
             settings::get_available_subdomains,
             settings::get_cloud_provider_schemas,

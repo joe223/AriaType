@@ -24,6 +24,7 @@ mod fn_emoji_blocker;
 mod manager;
 
 // Public API
+pub(crate) use hotkey_codec::canonicalize_hotkey_string;
 pub use manager::ShortcutManager;
 pub use profile_types::{
     ShortcutAction, ShortcutProfile, ShortcutProfilesMap, ShortcutTriggerMode,

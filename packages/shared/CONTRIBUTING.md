@@ -37,7 +37,7 @@
 
 ```bash
 # From repository root
-pnpm install
+corepack pnpm install
 
 # Type checking (primary validation)
 pnpm --filter @ariatype/shared typecheck

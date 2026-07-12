@@ -20,6 +20,53 @@ function invokeWithLogging<T>(command: string, args?: Record<string, unknown>): 
     });
 }
 
+/** Wrapped invoke for payloads that must never be written to application logs. */
+function invokeWithSensitiveArgs<T>(
+  command: string,
+  args: Record<string, unknown>,
+): Promise<T> {
+  const start = performance.now();
+  logger.debug("ipc_request", { command, args: "[redacted]" });
+
+  return invoke<T>(command, args)
+    .then((result) => {
+      const duration_ms = Math.round(performance.now() - start);
+      logger.debug("ipc_response", { command, duration_ms });
+      return result;
+    })
+    .catch((error: unknown) => {
+      const duration_ms = Math.round(performance.now() - start);
+      logger.error("ipc_error", {
+        command,
+        duration_ms,
+        error: "[redacted]",
+      });
+      throw error;
+    });
+}
+
+/** Wrapped invoke for commands whose returned value or error may be sensitive. */
+function invokeWithSensitiveResult<T>(command: string): Promise<T> {
+  const start = performance.now();
+  logger.debug("ipc_request", { command, args: "[redacted]" });
+
+  return invoke<T>(command, undefined)
+    .then((result) => {
+      const duration_ms = Math.round(performance.now() - start);
+      logger.debug("ipc_response", { command, duration_ms });
+      return result;
+    })
+    .catch((error: unknown) => {
+      const duration_ms = Math.round(performance.now() - start);
+      logger.error("ipc_error", {
+        command,
+        duration_ms,
+        error: "[redacted]",
+      });
+      throw error;
+    });
+}
+
 export interface Position {
   x: number;
   y: number;
@@ -239,6 +286,22 @@ export interface AppSettings {
   correction_memory_enabled: boolean;
 }
 
+export type SettingsExportResult = {
+  status: "saved";
+  file_path: string;
+};
+
+export type SettingsImportSelectionResult =
+  | { status: "selected"; document: string }
+  | { status: "cancelled" };
+
+export type SettingsImportRestartStrategy = "automatic" | "manual";
+
+export interface SettingsImportResult {
+  restart_required: boolean;
+  restart_strategy: SettingsImportRestartStrategy;
+}
+
 export interface ModelInfo {
   name: string;
   display_name: string;
@@ -329,6 +392,16 @@ export const textCommands = {
 
 export const settingsCommands = {
   getSettings: () => invokeWithLogging<AppSettings>("get_settings"),
+  exportSettings: () =>
+    invokeWithLogging<SettingsExportResult>("export_settings"),
+  selectSettingsImport: () =>
+    invokeWithSensitiveResult<SettingsImportSelectionResult>(
+      "select_settings_import",
+    ),
+  importSettings: (document: string) =>
+    invokeWithSensitiveArgs<SettingsImportResult>("import_settings", {
+      document,
+    }),
   updateSettings: (key: string, value: unknown) =>
     invokeWithLogging("update_settings", { key, value }),
   getGlossaryContent: (subdomain: string) =>

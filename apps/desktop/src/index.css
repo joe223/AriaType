@@ -272,6 +272,7 @@ body {
 
 [data-sonner-toast] {
   width: max-content;
+  max-width: min(30rem, calc(100vw - 2rem));
 }
 
 .toast-base {
@@ -310,4 +311,5 @@ body {
   font-size: 12px;
   opacity: 0.8;
   letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
 }
