@@ -47,6 +47,7 @@ A plan is only completed when all implementation units are closed, verification 
 | [Fix Settings Import Picker Crash](./completed/2026-07-12-001-fix-settings-import-picker-crash-plan.md) | fix | 2026-07-12 |
 | [Fix Settings Import Development Relaunch](./completed/2026-07-12-002-fix-settings-import-dev-relaunch-plan.md) | fix | 2026-07-12 |
 | [Fix Settings Transfer Full-Fidelity Backup](./completed/2026-07-12-003-fix-settings-transfer-full-fidelity-backup-plan.md) | fix | 2026-07-12 |
+| [Workspace Bootstrap](./completed/2026-07-12-004-feat-workspace-bootstrap-plan.md) | feat | 2026-07-12 |
 
 ## Provider API Reference
 

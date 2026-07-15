@@ -6,155 +6,171 @@ All notable changes to the desktop application will be documented in this file.
 
 ### Features
 
-- Support updater (9734996)
+- Support export settings (394876c)
 
 ### Bug Fixes
 
-- Allow fn modifier chord hotkeys (816a7db)
+- Avoid comment shortcut conflicts in dictation (89420e2)
+
+## v1.0.5 (2026-07-06)
+
+### Features
+
+- Support updater (a98fdb0)
+
+### Bug Fixes
+
+- Allow fn modifier chord hotkeys (802ad3a)
 
 ## v1.0.4 (2026-07-02)
 
 ### Bug Fixes
 
-- Release modifiers after windows paste injection (b5c4a73)
-- Stt sidecar should not lanuch terminal (83863b5)
-- Llm sidecar should not lanuch terminal (165caab)
-- Select popover can not be clicked (8d7caa9)
-- Learn compact corrections safely (3f327a2)
-- Pill/tooltip position in windows (e33bf62)
-- Preserve modal close transitions (5df5f22)
-- Allow production changelog loading (b31314c)
+- Release modifiers after windows paste injection (e1f2319)
+- Stt sidecar should not lanuch terminal (6744698)
+- Llm sidecar should not lanuch terminal (1e8f2b7)
+- Select popover can not be clicked (fde0e5d)
 
-## v1.0.0 (2026-06-15)
-
-### Features
-
-- Refine transcription polish and UX (af242a1)
-- Expose correction dictionaries (8968a88)
-- Make settings and local polish easier to use (df5b2bc)
+## v1.0.2 (2026-06-27)
 
 ### Bug Fixes
 
-- Surface settings nav items that need attention (92134f9)
+- Learn compact corrections safely (5392943)
+- Pill/tooltip position in windows (4dd9664)
+- Preserve modal close transitions (2e85e3e)
+- Allow production changelog loading (8347bed)
+
+## v1.0.1 (2026-06-15)
+
+### Features
+
+- Refine transcription polish and UX (6f31bfd)
+- Expose correction dictionaries (474a157)
+- Make settings and local polish easier to use (6f9e07e)
+
+### Bug Fixes
+
+- Preserve modal close transitions (2e85e3e)
+- Allow production changelog loading (8347bed)
+- Surface settings nav items that need attention (0782ca1)
 
 ## v0.6.5 (2026-06-08)
 
 ### Features
 
-- Make polish model risk diagnosable (17fc83b)
+- Make polish model risk diagnosable (9e54520)
 
 ### Bug Fixes
 
-- Keep local polish bounded and downloads complete (d2b4c59)
+- Keep local polish bounded and downloads complete (4741850)
 
-## v0.6.4 (2026-06-02)
+## v0.6.4 (2026-06-03)
 
 ### Bug Fixes
 
-- Make Windows shortcuts usable across platforms (4b238f4)
-- Keep tray window reachable from dock (b53ced4)
+- Make Windows shortcuts usable across platforms (6c8a06a)
+- Keep tray window reachable from dock (8b87607)
 
 ## v0.6.3 (2026-05-25)
 
 ### Features
 
-- Support windows (68cc615)
+- Support windows (adb73ec)
 
 ## v0.6.2 (2026-05-22)
 
 ### Bug Fixes
 
-- Prevent shortcut slash leaks (4dea12d)
-- Keep recording feedback and shortcut state trustworthy (6d2bdd2)
+- Prevent shortcut slash leaks (66d534a)
+- Keep recording feedback and shortcut state trustworthy (82b1759)
 
 ## v0.6.1 (2026-05-19)
 
 ### Bug Fixes
 
-- Keep idle tooltips from showing pill body (ad32ae3)
+- Keep idle tooltips from showing pill body (53fa411)
 
 ## v0.6.0 (2026-05-19)
 
 ### Features
 
-- Verify cloud setup and keep polish output plain text (73a5fb3)
-- Customize pill appearance (6a47ab4)
-- Support deliberate recording finish triggers (a80c22c)
-- Add voice-writing polish templates (9975217)
+- Verify cloud setup and keep polish output plain text (e9a807f)
+- Customize pill appearance (a83e1f4)
+- Support deliberate recording finish triggers (e9ee0d2)
+- Add voice-writing polish templates (acde99b)
 
 ### Bug Fixes
 
-- Adapt cloud polish timeout for long requests (fea6258)
-- Context aware visual terms (ce46436)
-- Add default value for pill_size field (f027349)
+- Adapt cloud polish timeout for long requests (aae00e2)
+- Context aware visual terms (ad8d5b7)
 
 ## v0.5.1 (2026-05-07)
 
 ### Features
 
-- Add window context capture via OCR to improve polish accuracy (e749271)
-- Optimize UI for better experience (6f4936c)
-- Optimize onboarding guide (db9e682)
-- Optimize text inject performance (c92c4ce)
+- Add window context capture via OCR to improve polish accuracy (ac6a493)
+- Optimize UI for better experience (14eaad3)
+- Optimize onboarding guide (48c59d5)
+- Optimize text inject performance (ee9cb14)
 
 ### Bug Fixes
 
-- Add default value for pill_size field (f027349)
+- Add default value for pill_size field (46bcc21)
 
 ## v0.4.0 (2026-04-25)
 
 ### Features
 
-- Implement multi-shortcut profiles and update UI (6814403)
-- Add changelog viewer in about page (0c72a43)
-- Add audio command boundary (b4e7a53)
-- Add single-instance plugin and handle silent recordings (a37e33c)
-- Add inhouse dev variant with custom icons and hotkey labels (8b43163)
+- Implement multi-shortcut profiles and update UI (388d909)
+- Add changelog viewer in about page (813614b)
+- Add audio command boundary (aa0aada)
+- Add single-instance plugin and handle silent recordings (a8144cd)
+- Add inhouse dev variant with custom icons and hotkey labels (b970923)
 
 ### Bug Fixes
 
-- Update changelog page layout (8380247)
-- Shortcut not working when no permission (ed322f3)
-- Prevent changelog fetch loop and improve UI (254476d)
+- Update changelog page layout (928b0da)
+- Shortcut not working when no permission (6a97b91)
+- Prevent changelog fetch loop and improve UI (79c07fa)
 
 ## v0.3.0 (2026-04-13)
 
 ### Features
 
-- Improve audio chunking (d9e6cf6)
-- Add recording cancellation and enhanced retry experience (e12a97e)
-- Add transcription retry functionality (c274588)
-- Refactor hotkey (d01a7b7)
+- Improve audio chunking (9e2f54d)
+- Add recording cancellation and enhanced retry experience (a4ae864)
+- Add transcription retry functionality (ac33fca)
+- Refactor hotkey (c2a744d)
 
 ## v0.2.0 (2026-04-11)
 
 ### Features
 
-- Add model file size validation and metal headers (151a7dd)
+- Add model file size validation and metal headers (5c0743d)
 
 ## v0.1.2 (2026-04-08)
 
 ### Features
 
-- Add custom template management and improve VAD (e4618d9)
+- Add custom template management and improve VAD (fdc3940)
 
 ### Bug Fixes
 
-- Return committed transcript from ElevenLabs finish() and add query params (64ede6b)
+- Return committed transcript from ElevenLabs finish() and add query params (84c3a40)
 
 ## v0.1.1 (2026-04-06)
 
 ### Features
 
-- Add Gemma 2B IT local model support (590cc77)
-- Add history dashboard, cloud service UI and improve design (9007d47)
+- Add Gemma 2B IT local model support (2a3769b)
+- Add history dashboard, cloud service UI and improve design (bc1bc8a)
 
 ### Bug Fixes
 
-- Eliminate flash of unstyled content on app startup (b56424a)
+- Eliminate flash of unstyled content on app startup (c092c9b)
 
 ## v0.1.0-beta.8 (2026-03-09)
 
 ### Bug Fixes
 
-- Embed beep audio files at compile time (a766981)
+- Embed beep audio files at compile time (e8ceda6)

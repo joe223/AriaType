@@ -123,6 +123,7 @@ Versioned feature specs with verification status. Each lives under `feat/<name>/
 | [Settings Transfer Native Import Picker](./feat/settings-transfer/0.1.2/prd/erd.md) | 0.1.2 | Completed |
 | [Settings Transfer Development Restart Safety](./feat/settings-transfer/0.1.3/prd/erd.md) | 0.1.3 | Completed |
 | [Settings Transfer Full-Fidelity Raw Backup](./feat/settings-transfer/0.1.4/prd/erd.md) | 0.1.4 | Completed |
+| [Workspace Bootstrap](./feat/workspace-bootstrap/0.1.0/prd/erd.md) | 0.1.0 | Completed |
 
 ---
 

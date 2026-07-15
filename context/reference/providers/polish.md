@@ -273,6 +273,13 @@ pipeline that the release workflow uses. The required-runtime gate still stays
 on: the build only proceeds automatically if that download-and-prepare step
 completes successfully.
 
+The root bootstrap installer performs the equivalent preparation for macOS. It
+discovers the arm64 and x64 archives from the repository-pinned llama.cpp GitHub
+release, caches both under `.tmp/llama-server-assets/`, and prepares the
+architecture-specific executable and `.dylib` resources. A partial macOS
+Runtime set is not considered ready: bootstrap repairs it so multi-architecture
+packaging cannot silently retain only the host Runtime.
+
 The GitHub release workflow pins a llama.cpp release tag, downloads the official
 macOS arm64, macOS x64, and Windows CPU x64 assets from
 `ggml-org/llama.cpp`, extracts `llama-server`, and builds with

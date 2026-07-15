@@ -5,6 +5,7 @@
   "license": "AGPL-3.0-only",
   "description": "AriaType - Voice to Text Application Monorepo",
   "scripts": {
+    "bootstrap": "node scripts/bootstrap.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",
     "lint:commit": "commitlint",
     "check:md-links": "node scripts/check-md-links.mjs",

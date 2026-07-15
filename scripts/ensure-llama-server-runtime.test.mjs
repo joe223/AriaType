@@ -137,16 +137,98 @@ test('ensureLlamaServerRuntime downloads and prepares a missing Windows runtime'
   });
 });
 
-test('ensureLlamaServerRuntime skips unsupported automatic downloads for macOS', async () => {
+test('ensureLlamaServerRuntime downloads and prepares both pinned macOS runtimes', async () => {
   const { root } = createFixture();
+  const assetsDir = resolve(root, '.tmp/llama-server-assets');
+  const requestedUrls = [];
+  let prepareCall = null;
   const result = await ensureLlamaServerRuntime({
     platform: 'macos',
     rootDir: root,
+    assetsDir,
+    releaseTag: 'b9568',
+    fetchImpl: async (url) => {
+      requestedUrls.push(url);
+      if (url.endsWith('/releases/tags/b9568')) {
+        return {
+          ok: true,
+          json: async () => ({
+            assets: [
+              {
+                name: 'llama-b9568-bin-macos-arm64.zip',
+                browser_download_url: 'https://example.test/macos-arm64.zip',
+              },
+              {
+                name: 'llama-b9568-bin-macos-x64.zip',
+                browser_download_url: 'https://example.test/macos-x64.zip',
+              },
+            ],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        arrayBuffer: async () => Buffer.from(`payload:${url}`),
+      };
+    },
+    prepareAssets(options) {
+      prepareCall = options;
+      return [
+        { key: 'macos-arm64', destinationResource: 'bin/apple-silicon/llama-server' },
+        { key: 'macos-x64', destinationResource: 'bin/intel/llama-server' },
+      ];
+    },
   });
 
-  assert.deepEqual(result, {
-    status: 'skipped',
+  assert.equal(result.status, 'prepared');
+  assert.equal(result.downloaded, true);
+  assert.deepEqual(result.assetNames, [
+    'llama-b9568-bin-macos-arm64.zip',
+    'llama-b9568-bin-macos-x64.zip',
+  ]);
+  assert.deepEqual(requestedUrls, [
+    'https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/b9568',
+    'https://example.test/macos-arm64.zip',
+    'https://example.test/macos-x64.zip',
+  ]);
+  assert.deepEqual(prepareCall, {
     platform: 'macos',
-    reason: 'auto_download_not_supported',
+    assetsDir,
+    rootDir: root,
   });
+});
+
+test('ensureLlamaServerRuntime repairs a partial macOS runtime set', async () => {
+  const { root, tauriDir } = createFixture();
+  const armRuntime = resolve(tauriDir, 'bin/apple-silicon/llama-server');
+  mkdirSync(dirname(armRuntime), { recursive: true });
+  writeFileSync(armRuntime, 'arm-only');
+
+  let prepared = false;
+  const result = await ensureLlamaServerRuntime({
+    platform: 'macos',
+    rootDir: root,
+    releaseTag: 'b9568',
+    fetchImpl: async (url) => {
+      if (url.endsWith('/releases/tags/b9568')) {
+        return {
+          ok: true,
+          json: async () => ({
+            assets: [
+              { name: 'llama-b9568-bin-macos-arm64.zip', browser_download_url: 'https://example.test/arm.zip' },
+              { name: 'llama-b9568-bin-macos-x64.zip', browser_download_url: 'https://example.test/x64.zip' },
+            ],
+          }),
+        };
+      }
+      return { ok: true, arrayBuffer: async () => Buffer.from('archive') };
+    },
+    prepareAssets() {
+      prepared = true;
+      return [];
+    },
+  });
+
+  assert.equal(result.status, 'prepared');
+  assert.equal(prepared, true);
 });

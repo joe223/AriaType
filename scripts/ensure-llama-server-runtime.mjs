@@ -19,6 +19,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const defaultRoot = resolve(__dirname, '..');
 
 export const DEFAULT_LLAMA_CPP_RELEASE_TAG = 'b9568';
+const LLAMA_CPP_RELEASE_API = 'https://api.github.com/repos/ggml-org/llama.cpp/releases/tags';
 
 export function configuredRuntimePathEnv(platformValue, env = process.env) {
   const platform = normalizePlatform(platformValue);
@@ -29,6 +30,29 @@ export function configuredRuntimePathEnv(platformValue, env = process.env) {
       return typeof value === 'string' && value.trim().length > 0;
     })?.pathEnv ?? null
   );
+}
+
+function runtimeSetComplete(platform, resources) {
+  if (platform === 'macos') {
+    return resources.includes('bin/universal/llama-server') || (
+      resources.includes('bin/apple-silicon/llama-server')
+      && resources.includes('bin/intel/llama-server')
+    );
+  }
+  if (platform === 'windows') {
+    return resources.includes('bin/windows/llama-server.exe');
+  }
+  return resources.includes('bin/linux/llama-server') || resources.includes('bin/llama-server');
+}
+
+function configuredRuntimeSetComplete(platform, env) {
+  if (platform === 'macos') {
+    return Boolean(env.ARIATYPE_LLAMA_SERVER_MACOS_PATH?.trim()) || (
+      Boolean(env.ARIATYPE_LLAMA_SERVER_MACOS_ARM64_PATH?.trim())
+      && Boolean(env.ARIATYPE_LLAMA_SERVER_MACOS_X64_PATH?.trim())
+    );
+  }
+  return configuredRuntimePathEnv(platform, env) !== null;
 }
 
 export function detectPinnedLlamaCppReleaseTag(rootDir = defaultRoot) {
@@ -55,6 +79,82 @@ export function officialLlamaServerAssetUrl(platformValue, releaseTag) {
   return `https://github.com/ggml-org/llama.cpp/releases/download/${releaseTag}/${officialLlamaServerAssetName(platformValue, releaseTag)}`;
 }
 
+function macosAssetArchitecture(assetName) {
+  if (!/macos/i.test(assetName) || !/\.(zip|tar\.gz|tgz)$/i.test(assetName)) {
+    return null;
+  }
+  if (/(arm64|aarch64)/i.test(assetName)) {
+    return 'arm64';
+  }
+  if (/(x64|x86_64)/i.test(assetName)) {
+    return 'x64';
+  }
+  return null;
+}
+
+export async function discoverOfficialMacosAssets(releaseTag, fetchImpl = globalThis.fetch) {
+  if (typeof fetchImpl !== 'function') {
+    throw new Error('fetch is unavailable; cannot discover local polish runtime assets');
+  }
+
+  const releaseUrl = `${LLAMA_CPP_RELEASE_API}/${releaseTag}`;
+  const response = await fetchImpl(releaseUrl, {
+    headers: {
+      accept: 'application/vnd.github+json',
+      'user-agent': 'AriaType build/runtime preparation',
+    },
+    redirect: 'follow',
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Failed to discover local polish runtime assets: ${releaseUrl} (${response.status} ${response.statusText})`
+    );
+  }
+
+  const release = await response.json();
+  const selected = new Map();
+  for (const asset of release.assets ?? []) {
+    const architecture = macosAssetArchitecture(asset.name ?? '');
+    if (architecture && !selected.has(architecture) && asset.browser_download_url) {
+      selected.set(architecture, {
+        architecture,
+        assetName: asset.name,
+        assetUrl: asset.browser_download_url,
+      });
+    }
+  }
+
+  const missing = ['arm64', 'x64'].filter((architecture) => !selected.has(architecture));
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing official macOS llama.cpp release asset(s) for ${releaseTag}: ${missing.join(', ')}`
+    );
+  }
+  return ['arm64', 'x64'].map((architecture) => selected.get(architecture));
+}
+
+async function downloadAsset({ assetName, assetUrl, assetsDir, fetchImpl }) {
+  mkdirSync(assetsDir, { recursive: true });
+  const assetPath = resolve(assetsDir, assetName);
+  if (existsSync(assetPath)) {
+    return { downloaded: false, assetName, assetPath, assetUrl };
+  }
+
+  const response = await fetchImpl(assetUrl, {
+    headers: {
+      'user-agent': 'AriaType build/runtime preparation',
+    },
+    redirect: 'follow',
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Failed to download local polish runtime asset: ${assetUrl} (${response.status} ${response.statusText})`
+    );
+  }
+  writeFileSync(assetPath, Buffer.from(await response.arrayBuffer()));
+  return { downloaded: true, assetName, assetPath, assetUrl };
+}
+
 export async function downloadOfficialLlamaServerAsset({
   platform,
   releaseTag,
@@ -65,43 +165,10 @@ export async function downloadOfficialLlamaServerAsset({
     throw new Error('fetch is unavailable; cannot download local polish runtime asset');
   }
 
-  mkdirSync(assetsDir, { recursive: true });
-
   const assetName = officialLlamaServerAssetName(platform, releaseTag);
-  const assetPath = resolve(assetsDir, assetName);
   const assetUrl = officialLlamaServerAssetUrl(platform, releaseTag);
-
-  if (existsSync(assetPath)) {
-    return {
-      downloaded: false,
-      assetName,
-      assetPath,
-      assetUrl,
-      releaseTag,
-    };
-  }
-
-  const response = await fetchImpl(assetUrl, {
-    headers: {
-      'user-agent': 'AriaType build/runtime preparation',
-    },
-    redirect: 'follow',
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `Failed to download local polish runtime asset: ${assetUrl} (${response.status} ${response.statusText})`
-    );
-  }
-
-  const body = Buffer.from(await response.arrayBuffer());
-  writeFileSync(assetPath, body);
-
   return {
-    downloaded: true,
-    assetName,
-    assetPath,
-    assetUrl,
+    ...(await downloadAsset({ assetName, assetUrl, assetsDir, fetchImpl })),
     releaseTag,
   };
 }
@@ -117,7 +184,7 @@ export async function ensureLlamaServerRuntime({
 } = {}) {
   const normalizedPlatform = normalizePlatform(platform);
   const runtimeResources = existingRuntimeResources(normalizedPlatform, rootDir);
-  if (runtimeResources.length > 0) {
+  if (runtimeSetComplete(normalizedPlatform, runtimeResources)) {
     return {
       status: 'already_present',
       platform: normalizedPlatform,
@@ -126,7 +193,7 @@ export async function ensureLlamaServerRuntime({
   }
 
   const configuredPathEnv = configuredRuntimePathEnv(normalizedPlatform, env);
-  if (configuredPathEnv) {
+  if (configuredRuntimeSetComplete(normalizedPlatform, env)) {
     return {
       status: 'env_configured',
       platform: normalizedPlatform,
@@ -134,7 +201,7 @@ export async function ensureLlamaServerRuntime({
     };
   }
 
-  if (normalizedPlatform !== 'windows') {
+  if (normalizedPlatform !== 'windows' && normalizedPlatform !== 'macos') {
     return {
       status: 'skipped',
       platform: normalizedPlatform,
@@ -142,12 +209,18 @@ export async function ensureLlamaServerRuntime({
     };
   }
 
-  const download = await downloadOfficialLlamaServerAsset({
-    platform: normalizedPlatform,
-    releaseTag,
-    assetsDir,
-    fetchImpl,
-  });
+  const downloads = normalizedPlatform === 'macos'
+    ? await Promise.all(
+      (await discoverOfficialMacosAssets(releaseTag, fetchImpl)).map((asset) =>
+        downloadAsset({ ...asset, assetsDir, fetchImpl })
+      )
+    )
+    : [await downloadOfficialLlamaServerAsset({
+      platform: normalizedPlatform,
+      releaseTag,
+      assetsDir,
+      fetchImpl,
+    })];
   const prepared = prepareAssets({
     platform: normalizedPlatform,
     assetsDir,
@@ -158,10 +231,11 @@ export async function ensureLlamaServerRuntime({
     status: 'prepared',
     platform: normalizedPlatform,
     releaseTag,
-    assetName: download.assetName,
-    assetPath: download.assetPath,
-    assetUrl: download.assetUrl,
-    downloaded: download.downloaded,
+    assetName: downloads[0].assetName,
+    assetNames: downloads.map((download) => download.assetName),
+    assetPath: downloads[0].assetPath,
+    assetUrl: downloads[0].assetUrl,
+    downloaded: downloads.some((download) => download.downloaded),
     prepared,
   };
 }
@@ -206,7 +280,7 @@ async function main() {
 
   const downloadState = result.downloaded ? 'downloaded' : 'reused cached';
   console.log(
-    `Prepared ${result.platform} local polish runtime from ${result.assetName} (${downloadState}).`
+    `Prepared ${result.platform} local polish runtime from ${result.assetNames.join(', ')} (${downloadState}).`
   );
 }
 

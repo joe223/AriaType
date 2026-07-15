@@ -26,6 +26,15 @@
 
 ```bash
 # From repository root
+npm run bootstrap
+
+# Install supported public build prerequisites and workspace packages
+npm run bootstrap -- --install
+
+# Or use the direct macOS/Linux wrapper
+./bootstrap.sh --install
+
+# Install workspace packages only
 corepack pnpm install
 
 # Start development server
@@ -43,6 +52,15 @@ pnpm --filter @ariatype/desktop tauri:build:win
 
 Use `corepack pnpm` for dependency installation and lockfile updates so the
 root `packageManager` pin (`pnpm@8.15.0`) is honored.
+
+The read-only bootstrap audit checks the full root release-build environment,
+including Cargo plugins, cross-build tools, Rust targets, ignored llama.cpp
+runtime resources, and the names of required signing variables. Install mode
+only installs public dependencies. It never prints, creates, imports, or copies
+Apple credentials or Tauri updater signing keys. If the machine uses a
+Homebrew-only Rust toolchain, install a rustup-managed toolchain manually before
+adding non-host targets such as `x86_64-apple-darwin`; bootstrap will not replace
+an existing Rust installation.
 
 ### Dev / Inhouse Build Conventions
 
