@@ -138,20 +138,7 @@ impl AudioRecorder {
     where
         F: Fn(&[i16], u32, u16) + Send + Sync + 'static,
     {
-        let mut handle_guard = self
-            .recording_handle
-            .lock()
-            .map_err(|e| format!("Lock error: {}", e))?;
-
-        if handle_guard.is_some() {
-            return Err("Already recording".to_string());
-        }
-
-        let (stop_tx, stop_rx) = mpsc::channel::<()>();
-        let sample_rate_arc = self.last_sample_rate.clone();
-        let channels_arc = self.last_channels.clone();
-
-        let thread_handle = thread::spawn(move || -> Result<(), String> {
+        self.start_streaming_with(move || {
             let host = cpal::default_host();
             let device = match device_name.as_deref() {
                 None | Some("default") => host
@@ -171,13 +158,6 @@ impl AudioRecorder {
 
             let sample_rate = config.sample_rate().0;
             let channels = config.channels();
-
-            if let Ok(mut sr) = sample_rate_arc.lock() {
-                *sr = Some(sample_rate);
-            }
-            if let Ok(mut ch) = channels_arc.lock() {
-                *ch = Some(channels);
-            }
 
             let on_pcm = Arc::new(on_pcm);
             let err_fn = |err| error!(error = %err, "audio_stream_error");
@@ -237,47 +217,79 @@ impl AudioRecorder {
             };
 
             stream.play().map_err(|e| e.to_string())?;
-            info!(sample_rate, channels, "streaming_recording_started");
+            Ok((stream, (sample_rate, channels)))
+        })
+    }
 
+    fn start_streaming_with<S, F>(&self, start_stream: F) -> Result<(u32, u16), String>
+    where
+        F: FnOnce() -> Result<(S, (u32, u16)), String> + Send + 'static,
+    {
+        let mut handle_guard = self
+            .recording_handle
+            .lock()
+            .map_err(|e| format!("Lock error: {}", e))?;
+        if handle_guard.is_some() {
+            return Err("Already recording".to_string());
+        }
+
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<(u32, u16), String>>();
+        let thread_handle = thread::spawn(move || -> Result<(), String> {
+            let (stream, params) = match start_stream() {
+                Ok(started) => started,
+                Err(error) => {
+                    let _ = ready_tx.send(Err(error.clone()));
+                    return Err(error);
+                }
+            };
+            if ready_tx.send(Ok(params)).is_err() {
+                // The caller timed out before the stream became available.
+                drop(stream);
+                return Ok(());
+            }
+            info!(
+                sample_rate = params.0,
+                channels = params.1,
+                "streaming_recording_started"
+            );
             let _ = stop_rx.recv();
             drop(stream);
-
             info!("streaming_recording_stopped");
             Ok(())
         });
 
-        *handle_guard = Some(RecordingHandle {
-            stop_tx: stop_tx.clone(),
-            thread_handle,
-        });
-
         const INIT_TIMEOUT_MS: u64 = 500;
-        const INIT_CHECK_INTERVAL_MS: u64 = 25;
-
-        let max_wait = Duration::from_millis(INIT_TIMEOUT_MS);
-        let check_interval = Duration::from_millis(INIT_CHECK_INTERVAL_MS);
-        let init_start = std::time::Instant::now();
-
-        let (sr, ch) = loop {
-            let sr = self.last_sample_rate.lock().ok().and_then(|g| *g);
-            let ch = self.last_channels.lock().ok().and_then(|g| *g);
-
-            match (sr, ch) {
-                (Some(sr), Some(ch)) => break (sr, ch),
-                _ => {
-                    if init_start.elapsed() >= max_wait {
-                        warn!(timeout_ms = INIT_TIMEOUT_MS, "audio_device_init_timeout");
-                        *handle_guard = None;
-                        let _ = stop_tx.send(());
-                        thread::sleep(Duration::from_millis(50));
-                        return Err("Failed to get recording parameters: audio device initialization timeout".to_string());
-                    }
-                    thread::sleep(check_interval);
+        match ready_rx.recv_timeout(Duration::from_millis(INIT_TIMEOUT_MS)) {
+            Ok(Ok((sample_rate, channels))) => {
+                if let Ok(mut last_sample_rate) = self.last_sample_rate.lock() {
+                    *last_sample_rate = Some(sample_rate);
                 }
+                if let Ok(mut last_channels) = self.last_channels.lock() {
+                    *last_channels = Some(channels);
+                }
+                *handle_guard = Some(RecordingHandle {
+                    stop_tx,
+                    thread_handle,
+                });
+                Ok((sample_rate, channels))
             }
-        };
-
-        Ok((sr, ch))
+            Ok(Err(error)) => {
+                let _ = thread_handle.join();
+                Err(error)
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                warn!(timeout_ms = INIT_TIMEOUT_MS, "audio_device_init_timeout");
+                let _ = stop_tx.send(());
+                Err("Audio device initialization timed out".to_string())
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                thread_handle
+                    .join()
+                    .map_err(|_| "Recording thread panicked during startup".to_string())??;
+                Err("Recording thread terminated before stream startup".to_string())
+            }
+        }
     }
 
     pub fn start<F>(
@@ -484,5 +496,95 @@ impl AudioRecorder {
 impl Default for AudioRecorder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod streaming_start_tests {
+    use super::AudioRecorder;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
+    use std::time::Duration;
+
+    #[test]
+    fn streaming_start_reports_current_session_format() {
+        let recorder = AudioRecorder::new();
+        assert_eq!(
+            recorder
+                .start_streaming_with(|| Ok(((), (48_000, 2))))
+                .unwrap(),
+            (48_000, 2)
+        );
+        recorder.stop().unwrap();
+        let next = recorder
+            .start_streaming_with(|| {
+                std::thread::sleep(Duration::from_millis(50));
+                Ok(((), (16_000, 1)))
+            })
+            .unwrap();
+        recorder.stop().unwrap();
+        assert_eq!(next, (16_000, 1));
+        assert_eq!(recorder.get_last_audio_params(), Some((16_000, 1)));
+    }
+
+    #[test]
+    fn streaming_start_returns_initialization_error_and_allows_restart() {
+        let recorder = AudioRecorder::new();
+        let result = recorder.start_streaming_with(|| {
+            Err::<((), (u32, u16)), _>("Microphone access denied".to_string())
+        });
+        assert_eq!(result, Err("Microphone access denied".to_string()));
+        assert!(!recorder.is_recording());
+        assert_eq!(recorder.get_last_audio_params(), None);
+        assert_eq!(
+            recorder
+                .start_streaming_with(|| Ok(((), (16_000, 1))))
+                .unwrap(),
+            (16_000, 1)
+        );
+        recorder.stop().unwrap();
+    }
+
+    #[test]
+    fn failed_later_stream_does_not_accept_previous_format() {
+        let recorder = AudioRecorder::new();
+        recorder
+            .start_streaming_with(|| Ok(((), (48_000, 2))))
+            .unwrap();
+        recorder.stop().unwrap();
+        let result = recorder
+            .start_streaming_with(|| Err::<((), (u32, u16)), _>("Device disconnected".to_string()));
+        assert_eq!(result, Err("Device disconnected".to_string()));
+        assert!(!recorder.is_recording());
+    }
+
+    #[test]
+    fn streaming_start_waits_until_stream_is_playing() {
+        let recorder = Arc::new(AudioRecorder::new());
+        let ready = Arc::new(AtomicBool::new(false));
+        let (release_tx, release_rx) = mpsc::channel();
+        let (started_tx, started_rx) = mpsc::channel();
+        let recorder_clone = recorder.clone();
+        let ready_clone = ready.clone();
+        let start_thread = std::thread::spawn(move || {
+            let result = recorder_clone.start_streaming_with(move || {
+                release_rx.recv().unwrap();
+                ready_clone.store(true, Ordering::SeqCst);
+                Ok(((), (16_000, 1)))
+            });
+            started_tx.send(result).unwrap();
+        });
+        assert!(started_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        release_tx.send(()).unwrap();
+        assert_eq!(
+            started_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap(),
+            (16_000, 1)
+        );
+        assert!(ready.load(Ordering::SeqCst));
+        start_thread.join().unwrap();
+        recorder.stop().unwrap();
     }
 }

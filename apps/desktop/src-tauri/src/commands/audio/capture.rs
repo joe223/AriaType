@@ -6,6 +6,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::commands::settings::CloudSttConfig;
 use crate::events::{emit_recording_state, EventName, RecordingStatus, TranscriptionPartialEvent};
+use crate::services::recording_lifecycle::finish_recording_processing;
 use crate::services::transcription_finalize::{
     finalize_empty_transcription, finalize_failed_transcription, finalize_silent_recording,
     finalize_successful_transcription_with_delivery,
@@ -19,9 +20,9 @@ use crate::utils::AppPaths;
 use super::polish::{maybe_polish_transcription_text, PolishProcessingResult};
 use super::postprocess::apply_post_stt_processing;
 use super::shared::{
-    apply_finalize_result, discard_canceled_result, emit_recording_error_then_idle,
-    recording_chunk_size_samples, should_unregister_cancel_hotkey_after_async_cleanup,
-    ParkingMutex, ProcessingEventTarget,
+    apply_finalize_result, apply_stream_delivery_failure, discard_canceled_result,
+    emit_recording_error_then_idle, recording_chunk_size_samples,
+    should_unregister_cancel_hotkey_after_async_cleanup, ParkingMutex, ProcessingEventTarget,
 };
 
 const WINDOW_CONTEXT_CAPTURE_TIMEOUT_MS: u64 = 8_000;
@@ -39,7 +40,7 @@ async fn wait_for_recording_to_end(app: AppHandle, task_id: u64) {
     loop {
         let should_stop_waiting = {
             let state = app.state::<AppState>();
-            let is_current_task = state.task_counter.load(Ordering::SeqCst) == task_id;
+            let is_current_task = state.is_current_recording_task(task_id);
             should_cancel_window_context_capture(
                 is_current_task,
                 state.is_recording.load(Ordering::SeqCst),
@@ -77,7 +78,7 @@ async fn capture_window_context_while_recording(
                 Ok(Some(ctx)) => {
                     let state = app.state::<AppState>();
                     if should_cancel_window_context_capture(
-                        state.task_counter.load(Ordering::SeqCst) == task_id,
+                        state.is_current_recording_task(task_id),
                         state.is_recording.load(Ordering::SeqCst),
                         state.is_cancellation_requested(task_id),
                     ) {
@@ -177,14 +178,9 @@ pub(super) fn start_unified_recording(
         Some(audio_device)
     };
 
-    let sample_rate: Arc<parking_lot::Mutex<u32>> = Arc::new(parking_lot::Mutex::new(0));
-    let channels: Arc<parking_lot::Mutex<u16>> = Arc::new(parking_lot::Mutex::new(0));
     let chunk_buffer: Arc<parking_lot::Mutex<Vec<i16>>> =
         Arc::new(parking_lot::Mutex::new(Vec::new()));
     let app_tx_clone = app_tx.clone();
-
-    let sample_rate_clone = sample_rate.clone();
-    let channels_clone = channels.clone();
 
     let vad_model_path = state.engine_manager.vad_model_path();
     let vad_model_exists = state.engine_manager.is_vad_model_downloaded();
@@ -208,8 +204,6 @@ pub(super) fn start_unified_recording(
         accumulated_text: String::new(),
         task_id,
         streaming_task: Arc::new(ParkingMutex::new(None)),
-        audio_save_path: Some(audio_save_path.clone()),
-        raw_audio_buffer: raw_audio_buffer.clone(),
         chunk_buffer: chunk_buffer.clone(),
         processor: processor.clone(),
         sample_rate: 0,
@@ -220,11 +214,6 @@ pub(super) fn start_unified_recording(
         let recorder = state.recorder.lock();
         recorder
             .start_streaming(device_name, move |pcm, sr, ch| {
-                if *sample_rate_clone.lock() == 0 {
-                    *sample_rate_clone.lock() = sr;
-                    *channels_clone.lock() = ch;
-                }
-
                 raw_audio_buffer_clone.lock().extend_from_slice(pcm);
 
                 let mut buffer = chunk_buffer.lock();
@@ -262,7 +251,11 @@ pub(super) fn start_unified_recording(
             })
             .map_err(|e| {
                 error!(error = %e, "recorder_start_failed-cloud");
-                state.is_recording.store(false, Ordering::SeqCst);
+                drop(state.take_streaming_state(task_id));
+                if state.is_current_recording_task(task_id) {
+                    state.is_recording.store(false, Ordering::SeqCst);
+                    state.is_transcribing.store(false, Ordering::SeqCst);
+                }
                 crate::commands::window::update_pill_visibility(app);
                 e.to_string()
             })?
@@ -270,14 +263,14 @@ pub(super) fn start_unified_recording(
 
     {
         let mut streaming_stt = state.streaming_stt.lock();
-        if let Some(stt) = streaming_stt.as_mut() {
+        if let Some(stt) = streaming_stt.as_mut().filter(|stt| stt.task_id == task_id) {
             stt.sample_rate = sr;
             stt.channels = ch;
         }
     }
 
-    let sr_for_async = sr;
-    let ch_for_async = ch;
+    let recorded_audio =
+        crate::audio::wav_writer::RecordedAudio::new(audio_save_path, raw_audio_buffer, sr, ch);
 
     let app_clone = app.clone();
     let resolved_polish_template_id_clone = resolved_polish_template_id.clone();
@@ -292,7 +285,10 @@ pub(super) fn start_unified_recording(
         if let Some(ref ctx) = window_context {
             let state_for_session = app_clone.state::<AppState>();
             let mut session = state_for_session.session_state.lock();
-            if let Some(s) = session.as_mut() {
+            if let Some(s) = session
+                .as_mut()
+                .filter(|session| session.task_id == task_id)
+            {
                 s.window_context = Some(ctx.clone());
             }
         }
@@ -440,7 +436,9 @@ pub(super) fn start_unified_recording(
         info!(task_id, total_chunks = chunks_sent, "audio_chunks_all_sent");
 
         let state_inner = app_clone.state::<AppState>();
-        if state_inner.is_cancellation_requested(task_id) {
+        if !state_inner.is_current_recording_task(task_id)
+            || state_inner.is_cancellation_requested(task_id)
+        {
             discard_canceled_result(&state_inner, task_id, None);
             return;
         }
@@ -448,7 +446,7 @@ pub(super) fn start_unified_recording(
         if chunks_sent == 0 {
             info!(task_id, "transcription_skipped_no_audio_chunks");
             let action = finalize_silent_recording(None);
-            let _ = state_inner.finish_session(task_id);
+            finish_recording_processing(&state_inner, task_id);
             apply_finalize_result(&app_clone, task_id, action).await;
         } else {
             emit_recording_state(&app_clone, RecordingStatus::Transcribing, task_id);
@@ -458,18 +456,14 @@ pub(super) fn start_unified_recording(
             let text_result: Result<String, String> = consumer.finish().await;
 
             let state_inner = app_clone.state::<AppState>();
-            if state_inner.is_cancellation_requested(task_id) {
+            if !state_inner.is_current_recording_task(task_id)
+                || state_inner.is_cancellation_requested(task_id)
+            {
                 discard_canceled_result(&state_inner, task_id, None);
                 return;
             }
 
-            let audio_path = {
-                let state = app_clone.state::<AppState>();
-                let streaming_stt = state.streaming_stt.lock();
-                streaming_stt.as_ref().and_then(|s| {
-                    crate::audio::wav_writer::save_raw_audio_to_file(s, sr_for_async, ch_for_async)
-                })
-            };
+            let audio_path = crate::audio::wav_writer::save_raw_audio_to_file(&recorded_audio);
 
             match text_result {
                 Ok(text) => {
@@ -492,7 +486,9 @@ pub(super) fn start_unified_recording(
                         "recording",
                     );
                     let state = app_clone.state::<AppState>();
-                    if state.is_cancellation_requested(task_id) {
+                    if !state.is_current_recording_task(task_id)
+                        || state.is_cancellation_requested(task_id)
+                    {
                         discard_canceled_result(&state, task_id, audio_path.as_ref());
                         return;
                     }
@@ -511,7 +507,9 @@ pub(super) fn start_unified_recording(
                     let polish_time_ms = polish_result.polish_ms;
                     let final_text = polish_result.text;
 
-                    if state.is_cancellation_requested(task_id) {
+                    if !state.is_current_recording_task(task_id)
+                        || state.is_cancellation_requested(task_id)
+                    {
                         discard_canceled_result(&state, task_id, audio_path.as_ref());
                         return;
                     }
@@ -550,27 +548,37 @@ pub(super) fn start_unified_recording(
                     } else {
                         finalize_empty_transcription(&state, audio_path)
                     };
-                    let _ = state.finish_session(task_id);
-                    apply_finalize_result(&app_clone, task_id, action).await;
+                    finish_recording_processing(&state, task_id);
+                    match polish_result.delivery_error {
+                        Some(error) => {
+                            apply_stream_delivery_failure(&app_clone, task_id, final_text, error)
+                                .await;
+                        }
+                        None => apply_finalize_result(&app_clone, task_id, action).await,
+                    }
                 }
                 Err(e) => {
                     let state = app_clone.state::<AppState>();
-                    if state.is_cancellation_requested(task_id) {
+                    if !state.is_current_recording_task(task_id)
+                        || state.is_cancellation_requested(task_id)
+                    {
                         discard_canceled_result(&state, task_id, audio_path.as_ref());
                         return;
                     }
                     error!(task_id, error = %e, "stt_finish_failed");
 
                     let action = finalize_failed_transcription(&state, audio_path, &e);
-                    let _ = state.finish_session(task_id);
+                    finish_recording_processing(&state, task_id);
                     apply_finalize_result(&app_clone, task_id, action).await;
                 }
             }
         }
 
         let final_state = app_clone.state::<AppState>();
-        final_state.is_transcribing.store(false, Ordering::SeqCst);
-        let active_task_id = final_state.task_counter.load(Ordering::SeqCst);
+        if final_state.is_current_recording_task(task_id) {
+            final_state.is_transcribing.store(false, Ordering::SeqCst);
+        }
+        let active_task_id = final_state.latest_recording_task_id();
         let cancellation_requested = final_state.is_cancellation_requested(task_id);
         if should_unregister_cancel_hotkey_after_async_cleanup(
             active_task_id,
@@ -583,8 +591,16 @@ pub(super) fn start_unified_recording(
         }
     });
 
-    if let Some(stt) = state.streaming_stt.lock().as_mut() {
-        stt.streaming_task.lock().replace(handle);
+    match state
+        .streaming_stt
+        .lock()
+        .as_mut()
+        .filter(|stt| stt.task_id == task_id)
+    {
+        Some(stt) => {
+            stt.streaming_task.lock().replace(handle);
+        }
+        None => handle.abort(),
     }
 
     info!(

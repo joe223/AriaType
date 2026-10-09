@@ -40,7 +40,7 @@ corepack pnpm install
 # Start development server
 pnpm --filter @ariatype/desktop tauri:dev
 
-# Build frontend only
+# Build frontend (also cleans the Rust build cache)
 pnpm --filter @ariatype/desktop build
 
 # Build full application (macOS)
@@ -233,6 +233,9 @@ pnpm --filter @ariatype/desktop run test:e2e:update
 ## Build & Release
 
 ```bash
+# From repository root: signed desktop builds, then website
+npm run build
+
 # macOS (signed)
 pnpm --filter @ariatype/desktop tauri:build:mac
 
@@ -251,6 +254,22 @@ pnpm --filter @ariatype/desktop tauri:build:mac-universal
 # Windows
 pnpm --filter @ariatype/desktop tauri:build:win
 ```
+
+On macOS, root `npm run build` produces macOS ARM64 and Intel bundles and
+cross-compiles Windows x64 using cargo-xwin. It preserves completed bundles
+across the frontend script's Rust-cache cleanup. Use a rustup toolchain with
+`aarch64-apple-darwin`, `x86_64-apple-darwin`, and `x86_64-pc-windows-msvc`
+installed. Apple signing/notarization and updater signing credentials are
+required by the signed pipeline.
+
+Collected installers and updater manifests are written to
+`apps/desktop/src-tauri/target/release/github-release/`. The Windows cross-build
+NSIS installer also lives under
+`src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`; a native build
+without an explicit target writes to `src-tauri/target/release/bundle/nsis/`.
+These are local outputs; this command does not publish a release. Tauri v2
+installer updates require the matching `.exe.sig` or `.msi.sig` upload alongside
+the installer; legacy ZIP signatures do not replace them.
 
 ---
 

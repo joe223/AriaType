@@ -1,7 +1,7 @@
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc, Arc,
 };
 use tauri::async_runtime::JoinHandle;
@@ -27,10 +27,6 @@ pub struct StreamingSttState {
     pub accumulated_text: String,
     pub task_id: u64,
     pub streaming_task: Arc<Mutex<Option<JoinHandle<()>>>>,
-    /// Path where the raw audio will be saved (for retry functionality).
-    pub audio_save_path: Option<std::path::PathBuf>,
-    /// Accumulated raw PCM samples (before VAD/processing) for saving to file.
-    pub raw_audio_buffer: Arc<Mutex<Vec<i16>>>,
     /// Buffered raw device PCM that has not yet reached the chunk threshold.
     pub chunk_buffer: Arc<Mutex<Vec<i16>>>,
     /// Streaming processor used for chunk preprocessing and VAD.
@@ -189,6 +185,8 @@ pub struct AppState {
     pub output_path: Mutex<Option<String>>,
     /// Monotonically increasing task ID; incremented on each new recording session
     pub task_counter: AtomicU64,
+    /// Identity of the most recent recording, independent of history retry IDs.
+    last_recording_task_id: AtomicU64,
     /// Timestamp (ms since UNIX epoch) when the current recording started; used to
     /// suppress spurious `audio-activity` events caused by the start beep
     pub recording_start_time: AtomicU64,
@@ -243,6 +241,7 @@ impl AppState {
             is_transcribing: AtomicBool::new(false),
             output_path: Mutex::new(None),
             task_counter: AtomicU64::new(0),
+            last_recording_task_id: AtomicU64::new(0),
             recording_start_time: AtomicU64::new(0),
             level_monitor_tx: Mutex::new(Some(level_tx)),
             level_monitor_rx: Mutex::new(Some(level_rx)),
@@ -276,6 +275,7 @@ impl AppState {
 
     pub fn start_session(&self, task_id: u64, profile: Option<&ShortcutProfile>) {
         let mut session = self.session_state.lock();
+        self.last_recording_task_id.store(task_id, Ordering::SeqCst);
         *session = Some(SessionState {
             task_id,
             accumulated_text: String::new(),
@@ -316,14 +316,38 @@ impl AppState {
             .map(|s| (s.accumulated_text.clone(), s.chunk_count))
     }
 
+    pub fn latest_recording_task_id(&self) -> u64 {
+        let task_id = self.last_recording_task_id.load(Ordering::SeqCst);
+        if task_id == 0 {
+            self.task_counter.load(Ordering::SeqCst)
+        } else {
+            task_id
+        }
+    }
+
+    pub fn is_current_recording_task(&self, task_id: u64) -> bool {
+        self.latest_recording_task_id() == task_id
+    }
+
+    pub fn take_streaming_state(&self, task_id: u64) -> Option<StreamingSttState> {
+        let mut streaming_state = self.streaming_stt.lock();
+        if streaming_state
+            .as_ref()
+            .is_some_and(|s| s.task_id == task_id)
+        {
+            streaming_state.take()
+        } else {
+            None
+        }
+    }
+
     pub fn finish_session(&self, task_id: u64) -> Option<(String, usize)> {
         let mut session = self.session_state.lock();
-        // take() drops the entire SessionState including window_context,
-        // ensuring no context leaks into the next session.
-        session
-            .take()
-            .filter(|s| s.task_id == task_id)
-            .map(|s| (s.accumulated_text, s.chunk_count))
+        if session.as_ref().is_some_and(|s| s.task_id == task_id) {
+            session.take().map(|s| (s.accumulated_text, s.chunk_count))
+        } else {
+            None
+        }
     }
 
     pub fn clear_session(&self) {
@@ -343,6 +367,36 @@ unsafe impl Sync for AppState {}
 #[cfg(test)]
 mod tests {
     use super::AppState;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn recording_identity_survives_unrelated_retry_allocation_and_session_cleanup() {
+        let state = AppState::new();
+        state.start_session(7, None);
+        state.task_counter.store(8, Ordering::SeqCst);
+
+        assert!(state.is_current_recording_task(7));
+        assert!(!state.is_current_recording_task(8));
+        state.finish_session(7);
+        assert_eq!(state.latest_recording_task_id(), 7);
+
+        state.start_session(9, None);
+        assert!(!state.is_current_recording_task(7));
+        assert!(state.is_current_recording_task(9));
+    }
+
+    #[test]
+    fn finishing_an_older_session_preserves_the_newer_session() {
+        let state = AppState::new();
+        state.start_session(8, None);
+        state.append_session_text(8, "new session");
+
+        assert_eq!(state.finish_session(7), None);
+        assert_eq!(
+            state.get_session_text(8),
+            Some(("new session".to_string(), 1))
+        );
+    }
 
     #[test]
     fn cancellation_is_tracked_per_task() {

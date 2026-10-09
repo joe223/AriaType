@@ -29,7 +29,7 @@ fn cancel_recording_internal(
         .try_state::<AppState>()
         .ok_or_else(|| "AppState not available".to_string())?;
 
-    let active_task_id = state.task_counter.load(std::sync::atomic::Ordering::SeqCst);
+    let active_task_id = state.latest_recording_task_id();
 
     if unregister_cancel_hotkey_immediately {
         if let Some(shortcut_manager) = app.try_state::<crate::shortcut::ShortcutManager>() {
@@ -46,7 +46,7 @@ fn cancel_recording_internal(
         let _ = recorder.stop();
     }
 
-    if let Some(stt) = state.streaming_stt.lock().take() {
+    if let Some(stt) = state.take_streaming_state(prepared.task_id) {
         if let Some(handle) = stt.streaming_task.lock().take() {
             await_streaming_task_in_background(prepared.task_id, handle);
         }

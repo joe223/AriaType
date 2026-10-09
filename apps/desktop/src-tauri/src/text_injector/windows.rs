@@ -1,107 +1,47 @@
 #![cfg_attr(all(test, not(target_os = "windows")), allow(dead_code))]
 
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
-use tracing::{info, warn};
+use tracing::info;
 
 pub struct WindowsInjector;
 
-const CHUNK_SIZE: usize = 100;
-const CHUNK_DELAY_MS: u64 = 50;
-
 impl super::TextInjector for WindowsInjector {
-    fn insert(&self, text: &str, write_clipboard: &dyn Fn()) {
-        let grapheme_count = text.chars().count();
-        info!(
-            text_len = text.len(),
-            grapheme_count, "text_injection_started"
-        );
+    fn insert(
+        &self,
+        text: &str,
+        write_clipboard: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), String> {
+        info!(text_len = text.len(), "text_injection_started");
+        insert_with_clipboard(text, write_clipboard, &mut || self.paste_from_clipboard())?;
+        info!("text_injection_completed-clipboard");
+        Ok(())
+    }
+}
 
-        // For long text, use clipboard paste (more reliable)
-        if grapheme_count > 400 {
-            info!(grapheme_count, "text_injection_clipboard_mode-long_text");
-            write_clipboard();
-            if let Err(e) = self.paste_from_clipboard() {
-                warn!(error = %e, "clipboard_paste_failed");
-            }
-            return;
-        }
+fn insert_with_clipboard(
+    text: &str,
+    write_clipboard: &dyn Fn() -> Result<(), String>,
+    paste: &mut dyn FnMut() -> Result<(), String>,
+) -> Result<(), String> {
+    if text.is_empty() {
+        return Ok(());
+    }
+    write_clipboard().map_err(|error| format!("clipboard write failed: {error}"))?;
+    paste().map_err(|error| format!("clipboard paste failed: {error}"))
+}
 
-        // Try keyboard simulation first
-        if self.try_enigo_key_sequence(text) {
-            info!("text_injection_completed-enigo");
-            return;
-        }
-
-        // Fallback to clipboard paste
-        info!("text_injection_fallback-clipboard");
-        write_clipboard();
-        if let Err(e) = self.paste_from_clipboard() {
-            warn!(error = %e, "clipboard_paste_failed");
-        }
+fn keyboard_settings() -> Settings {
+    Settings {
+        windows_dw_extra_info: Some(super::WINDOWS_INPUT_EVENT_MARKER),
+        ..Settings::default()
     }
 }
 
 impl WindowsInjector {
-    fn try_enigo_key_sequence(&self, text: &str) -> bool {
-        let mut enigo = match Enigo::new(&Settings::default()) {
-            Ok(e) => e,
-            Err(e) => {
-                warn!(error = %e, "enigo_creation_failed");
-                return false;
-            }
-        };
-
-        let char_count = text.chars().count();
-
-        if char_count <= CHUNK_SIZE {
-            match enigo.text(text) {
-                Ok(_) => {
-                    info!("text_injection_enigo_succeeded-single_chunk");
-                    true
-                }
-                Err(e) => {
-                    warn!(error = %e, "text_injection_enigo_failed");
-                    false
-                }
-            }
-        } else {
-            // Split into chunks to avoid IME issues
-            let chars: Vec<char> = text.chars().collect();
-            let chunk_count = char_count.div_ceil(CHUNK_SIZE);
-            info!(chunk_count, "text_injection_chunking_started");
-
-            for (i, chunk) in chars.chunks(CHUNK_SIZE).enumerate() {
-                let chunk_str: String = chunk.iter().collect();
-                match enigo.text(&chunk_str) {
-                    Ok(_) => {
-                        info!(
-                            chunk_index = i + 1,
-                            chunk_chars = chunk.len(),
-                            "text_injection_chunk_injected"
-                        );
-                    }
-                    Err(e) => {
-                        warn!(chunk_index = i + 1, error = %e, "text_injection_chunk_failed");
-                        return false;
-                    }
-                }
-
-                if i < chunk_count - 1 {
-                    std::thread::sleep(std::time::Duration::from_millis(CHUNK_DELAY_MS));
-                }
-            }
-
-            info!("text_injection_enigo_succeeded-chunked");
-            true
-        }
-    }
-
     fn paste_from_clipboard(&self) -> Result<(), String> {
-        let mut enigo =
-            Enigo::new(&Settings::default()).map_err(|e| format!("Failed to create Enigo: {e}"))?;
-
+        let mut enigo = Enigo::new(&keyboard_settings())
+            .map_err(|error| format!("failed to create keyboard injector: {error}"))?;
         std::thread::sleep(std::time::Duration::from_millis(20));
-
         send_clipboard_paste_shortcut(&mut enigo)?;
         info!("clipboard_paste_ctrlv_sent");
         Ok(())
@@ -119,7 +59,11 @@ impl KeyboardDriver for Enigo {
 }
 
 fn send_clipboard_paste_shortcut(keyboard: &mut dyn KeyboardDriver) -> Result<(), String> {
-    let mut errors = Vec::new();
+    let mut errors = release_keyboard_modifiers(keyboard);
+    if !errors.is_empty() {
+        errors.extend(release_keyboard_modifiers(keyboard));
+        return Err(errors.join("; "));
+    }
 
     if let Err(error) = keyboard.key(Key::Control, Direction::Press) {
         errors.push(format!("ctrl_press_failed: {error}"));
@@ -166,6 +110,14 @@ fn release_keyboard_modifiers(keyboard: &mut dyn KeyboardDriver) -> Vec<String> 
         Key::Alt,
         Key::Option,
         Key::Meta,
+        #[cfg(target_os = "windows")]
+        Key::LMenu,
+        #[cfg(target_os = "windows")]
+        Key::RMenu,
+        #[cfg(target_os = "windows")]
+        Key::LWin,
+        #[cfg(target_os = "windows")]
+        Key::RWin,
     ]
     .into_iter()
     .filter_map(|key| {
@@ -195,11 +147,17 @@ mod tests {
     struct FakeKeyboard {
         events: Vec<KeyEvent>,
         failures: Vec<(Key, Direction, &'static str)>,
+        matches_to_skip: usize,
     }
 
     impl FakeKeyboard {
         fn fail_on(mut self, key: Key, direction: Direction, message: &'static str) -> Self {
             self.failures.push((key, direction, message));
+            self
+        }
+
+        fn skip_matching_failures(mut self, count: usize) -> Self {
+            self.matches_to_skip = count;
             self
         }
     }
@@ -214,7 +172,11 @@ mod tests {
                         *failed_key == key && *failed_direction == direction
                     })
             {
-                return Err((*message).to_string());
+                if self.matches_to_skip > 0 {
+                    self.matches_to_skip -= 1;
+                } else {
+                    return Err((*message).to_string());
+                }
             }
 
             Ok(())
@@ -232,7 +194,12 @@ mod tests {
         let error = send_clipboard_paste_shortcut(&mut keyboard).unwrap_err();
 
         assert!(error.contains("v_click_failed: v was blocked"));
-        assert!(keyboard.events.starts_with(&[
+        let control_press = keyboard
+            .events
+            .iter()
+            .position(|event| event.key == Key::Control && event.direction == Direction::Press)
+            .unwrap();
+        assert!(keyboard.events[control_press..].starts_with(&[
             KeyEvent {
                 key: Key::Control,
                 direction: Direction::Press,
@@ -250,11 +217,9 @@ mod tests {
 
     #[test]
     fn paste_shortcut_reports_control_release_failure_after_cleanup_attempt() {
-        let mut keyboard = FakeKeyboard::default().fail_on(
-            Key::Control,
-            Direction::Release,
-            "ctrl release blocked",
-        );
+        let mut keyboard = FakeKeyboard::default()
+            .fail_on(Key::Control, Direction::Release, "ctrl release blocked")
+            .skip_matching_failures(1);
 
         let error = send_clipboard_paste_shortcut(&mut keyboard).unwrap_err();
 
@@ -308,7 +273,147 @@ mod tests {
                     key: Key::Meta,
                     direction: Direction::Release,
                 },
+                #[cfg(target_os = "windows")]
+                KeyEvent {
+                    key: Key::LMenu,
+                    direction: Direction::Release
+                },
+                #[cfg(target_os = "windows")]
+                KeyEvent {
+                    key: Key::RMenu,
+                    direction: Direction::Release
+                },
+                #[cfg(target_os = "windows")]
+                KeyEvent {
+                    key: Key::LWin,
+                    direction: Direction::Release
+                },
+                #[cfg(target_os = "windows")]
+                KeyEvent {
+                    key: Key::RWin,
+                    direction: Direction::Release
+                },
             ]
+        );
+    }
+
+    #[test]
+    fn literal_delivery_writes_current_text_before_one_paste() {
+        use std::cell::RefCell;
+        for text in ["hello", "first line\nsecond line\tcolumn", &"x".repeat(401)] {
+            let calls = RefCell::new(Vec::new());
+            let result = super::insert_with_clipboard(
+                text,
+                &|| {
+                    calls.borrow_mut().push(format!("write:{text}"));
+                    Ok(())
+                },
+                &mut || {
+                    calls.borrow_mut().push("paste".to_string());
+                    Ok(())
+                },
+            );
+            assert!(result.is_ok());
+            assert_eq!(
+                *calls.borrow(),
+                vec![format!("write:{text}"), "paste".to_string()]
+            );
+        }
+    }
+
+    #[test]
+    fn clipboard_write_failure_prevents_paste() {
+        let mut pasted = false;
+        let result = super::insert_with_clipboard(
+            "hello",
+            &|| Err("clipboard unavailable".to_string()),
+            &mut || {
+                pasted = true;
+                Ok(())
+            },
+        );
+        assert!(result.unwrap_err().contains("clipboard unavailable"));
+        assert!(!pasted);
+    }
+
+    #[test]
+    fn paste_failure_is_returned_without_retrying_text() {
+        let mut attempts = 0;
+        let result = super::insert_with_clipboard(&"x".repeat(150), &|| Ok(()), &mut || {
+            attempts += 1;
+            Err("input blocked".to_string())
+        });
+        assert!(result.unwrap_err().contains("input blocked"));
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn empty_text_does_not_modify_clipboard_or_paste() {
+        let result = super::insert_with_clipboard(
+            "",
+            &|| Err("clipboard must not be used".to_string()),
+            &mut || Err("paste must not be used".to_string()),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn windows_injector_marks_its_keyboard_events() {
+        assert_eq!(
+            super::keyboard_settings().windows_dw_extra_info,
+            Some(crate::text_injector::WINDOWS_INPUT_EVENT_MARKER)
+        );
+    }
+
+    #[test]
+    fn paste_releases_held_modifiers_before_pressing_control() {
+        let mut keyboard = FakeKeyboard::default();
+        send_clipboard_paste_shortcut(&mut keyboard).unwrap();
+        let control_press = keyboard
+            .events
+            .iter()
+            .position(|event| event.key == Key::Control && event.direction == Direction::Press)
+            .unwrap();
+        assert!(control_press > 0);
+        assert!(keyboard.events[..control_press]
+            .iter()
+            .all(|event| event.direction == Direction::Release));
+        for key in [
+            Key::Control,
+            Key::LControl,
+            Key::RControl,
+            Key::Shift,
+            Key::LShift,
+            Key::RShift,
+            Key::Alt,
+            Key::Meta,
+        ] {
+            assert!(keyboard.events[..control_press]
+                .iter()
+                .any(|event| event.key == key));
+        }
+    }
+
+    #[test]
+    fn held_modifier_release_failure_prevents_paste_and_retries_cleanup() {
+        let mut keyboard = FakeKeyboard::default().fail_on(
+            Key::Shift,
+            Direction::Release,
+            "shift release blocked",
+        );
+        let error = send_clipboard_paste_shortcut(&mut keyboard).unwrap_err();
+        assert!(error.contains("shift release blocked"));
+        assert!(!keyboard
+            .events
+            .iter()
+            .any(|event| event.direction == Direction::Click));
+        assert!(
+            keyboard
+                .events
+                .iter()
+                .filter(|event| event.key == Key::Shift && event.direction == Direction::Release)
+                .count()
+                >= 2
         );
     }
 }

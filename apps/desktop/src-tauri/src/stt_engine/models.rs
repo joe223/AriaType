@@ -189,7 +189,7 @@ pub fn recommend_by_language(lang: &str) -> Vec<&'static ModelDefinition> {
     if lang == "auto" {
         // Return all models for auto-detect, sorted by accuracy
         let mut models: Vec<_> = ALL.to_vec();
-        models.sort_by(|a, b| b.accuracy_score.cmp(&a.accuracy_score));
+        models.sort_by_key(|model| std::cmp::Reverse(model.accuracy_score));
         return models;
     }
 

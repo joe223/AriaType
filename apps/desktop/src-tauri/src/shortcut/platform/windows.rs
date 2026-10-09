@@ -1,9 +1,13 @@
+#![cfg_attr(all(test, not(target_os = "windows")), allow(dead_code))]
+
 #[cfg(target_os = "windows")]
 use std::ptr;
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "windows")]
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc;
+#[cfg(any(test, target_os = "windows"))]
+use std::sync::mpsc::Sender;
 #[cfg(target_os = "windows")]
 use std::sync::{Arc, LazyLock, Mutex};
 #[cfg(target_os = "windows")]
@@ -11,12 +15,14 @@ use std::thread::{self, JoinHandle};
 #[cfg(target_os = "windows")]
 use std::time::Duration;
 
-#[cfg(target_os = "windows")]
+#[cfg(any(test, target_os = "windows"))]
 use crate::shortcut::hotkey_codec::key_token_from_rdev_key;
 #[cfg(target_os = "windows")]
-use crate::shortcut::matcher::{handle_input, MatcherInput, MatcherState, ModifierKey};
+use crate::shortcut::matcher::{handle_input, MatcherState};
+#[cfg(any(test, target_os = "windows"))]
+use crate::shortcut::matcher::{MatcherInput, ModifierKey};
 
-#[cfg(target_os = "windows")]
+#[cfg(any(test, target_os = "windows"))]
 use super::{PlatformRunner, RunnerMode, RuntimeEvent, SharedMatcherSnapshot};
 
 #[cfg(target_os = "windows")]
@@ -128,6 +134,9 @@ fn run_windows_runner(
         };
 
         let keyboard = unsafe { &*(l_param as *const KBDLLHOOKSTRUCT) };
+        if should_ignore_windows_input(keyboard.flags, keyboard.dwExtraInfo) {
+            return unsafe { CallNextHookEx(ptr::null_mut(), code, w_param, l_param) };
+        }
         let Some(input) = matcher_input_from_vk(w_param as UINT, keyboard.vkCode as u16) else {
             return unsafe { CallNextHookEx(ptr::null_mut(), code, w_param, l_param) };
         };
@@ -209,10 +218,29 @@ fn windows_last_error_message(operation: &str) -> String {
     format!("{operation} failed with Windows error code {code}")
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(test, target_os = "windows"))]
+fn should_ignore_windows_input(flags: u32, extra_info: usize) -> bool {
+    const INJECTED_EVENT_FLAG: u32 = 0x10;
+    flags & INJECTED_EVENT_FLAG != 0
+        && extra_info == crate::text_injector::WINDOWS_INPUT_EVENT_MARKER
+}
+
+#[cfg(any(test, target_os = "windows"))]
 fn matcher_input_from_vk(message: u32, vk_code: u16) -> Option<MatcherInput> {
     use rdev::Key;
-    use winapi::um::winuser::{WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP};
+    const WM_KEYDOWN: u32 = 0x100;
+    const WM_KEYUP: u32 = 0x101;
+    const WM_SYSKEYDOWN: u32 = 0x104;
+    const WM_SYSKEYUP: u32 = 0x105;
+
+    if (112..=131).contains(&vk_code) {
+        let token = format!("F{}", vk_code - 111);
+        return match message {
+            WM_KEYDOWN | WM_SYSKEYDOWN => Some(MatcherInput::KeyPressed(token)),
+            WM_KEYUP | WM_SYSKEYUP => Some(MatcherInput::KeyReleased(token)),
+            _ => None,
+        };
+    }
 
     let key = match vk_code {
         16 => {
@@ -297,18 +325,6 @@ fn matcher_input_from_vk(message: u32, vk_code: u16) -> Option<MatcherInput> {
         40 => Key::DownArrow,
         35 => Key::End,
         27 => Key::Escape,
-        112 => Key::F1,
-        113 => Key::F2,
-        114 => Key::F3,
-        115 => Key::F4,
-        116 => Key::F5,
-        117 => Key::F6,
-        118 => Key::F7,
-        119 => Key::F8,
-        120 => Key::F9,
-        121 => Key::F10,
-        122 => Key::F11,
-        123 => Key::F12,
         36 => Key::Home,
         37 => Key::LeftArrow,
         34 => Key::PageDown,
@@ -403,6 +419,7 @@ pub fn start_runner(
     _mode: RunnerMode,
     _snapshot: SharedMatcherSnapshot,
     _event_tx: Sender<RuntimeEvent>,
+    _generation: u64,
 ) -> Result<WindowsRunner, String> {
     Err("windows runner unavailable on this platform".to_string())
 }
@@ -411,5 +428,51 @@ pub fn start_runner(
 impl PlatformRunner for WindowsRunner {
     fn stop(&mut self) -> Result<(), String> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{matcher_input_from_vk, should_ignore_windows_input};
+    use crate::shortcut::hotkey_codec::canonicalize_hotkey_string;
+    use crate::shortcut::matcher::MatcherInput;
+    use crate::text_injector::WINDOWS_INPUT_EVENT_MARKER;
+
+    #[test]
+    fn every_accepted_function_key_decodes_press_and_release() {
+        for number in 1..=20 {
+            let token = format!("F{number}");
+            assert_eq!(canonicalize_hotkey_string(&token).unwrap(), token);
+            assert_eq!(
+                matcher_input_from_vk(0x100, 111 + number),
+                Some(MatcherInput::KeyPressed(token.clone()))
+            );
+            assert_eq!(
+                matcher_input_from_vk(0x101, 111 + number),
+                Some(MatcherInput::KeyReleased(token))
+            );
+        }
+    }
+
+    #[test]
+    fn own_injected_events_bypass_shortcuts() {
+        assert!(should_ignore_windows_input(
+            0x10,
+            WINDOWS_INPUT_EVENT_MARKER
+        ));
+        assert!(should_ignore_windows_input(
+            0x12,
+            WINDOWS_INPUT_EVENT_MARKER
+        ));
+    }
+
+    #[test]
+    fn unrelated_injected_and_physical_events_remain_observable() {
+        assert!(!should_ignore_windows_input(
+            0x10,
+            WINDOWS_INPUT_EVENT_MARKER + 1
+        ));
+        assert!(!should_ignore_windows_input(0, WINDOWS_INPUT_EVENT_MARKER));
+        assert!(!should_ignore_windows_input(0, 0));
     }
 }

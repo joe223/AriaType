@@ -332,7 +332,11 @@ fn paste_cmd_v_enigo() -> bool {
 }
 
 impl super::TextInjector for MacosInjector {
-    fn insert(&self, text: &str, _write_clipboard: &dyn Fn()) {
+    fn insert(
+        &self,
+        text: &str,
+        _write_clipboard: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), String> {
         let grapheme_count = text.graphemes(true).count();
         let has_newline = text.contains('\n');
         info!(
@@ -344,22 +348,31 @@ impl super::TextInjector for MacosInjector {
             info!("text_injection_clipboard_mode-multiline");
             let ok = try_clipboard_paste(text);
             info!(success = ok, "text_injection_completed-clipboard");
-            return;
+            return clipboard_paste_result(ok);
         }
 
         if grapheme_count > 400 {
             info!(grapheme_count, "text_injection_clipboard_mode-long_text");
             let ok = try_clipboard_paste(text);
             info!(success = ok, "text_injection_completed-clipboard");
-            return;
+            return clipboard_paste_result(ok);
         }
 
         if try_enigo_key_sequence(text) {
             info!("text_injection_completed-enigo");
-            return;
+            return Ok(());
         }
         info!("text_injection_fallback-clipboard");
         let ok = try_clipboard_paste(text);
         info!(success = ok, "text_injection_completed-clipboard");
+        clipboard_paste_result(ok)
+    }
+}
+
+fn clipboard_paste_result(succeeded: bool) -> Result<(), String> {
+    if succeeded {
+        Ok(())
+    } else {
+        Err("text delivery failed: clipboard paste was not sent".to_string())
     }
 }

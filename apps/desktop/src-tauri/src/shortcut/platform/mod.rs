@@ -9,7 +9,7 @@ use crate::shortcut::matcher::{MatcherEvent, MatcherSnapshot};
 
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(target_os = "windows")]
+#[cfg(any(test, target_os = "windows"))]
 mod windows;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

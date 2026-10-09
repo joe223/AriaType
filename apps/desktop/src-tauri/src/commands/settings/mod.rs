@@ -4,6 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
+#[cfg(not(windows))]
+use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tracing::{info, warn};
 
 use crate::commands::window::position_pill_window;
@@ -12,7 +14,70 @@ use crate::shortcut::ShortcutProfilesMap;
 use crate::state::app_state::AppState;
 use crate::utils::AppPaths;
 
+mod autostart;
 pub(crate) mod transfer;
+
+#[cfg(not(windows))]
+struct AppStartupRegistration<'a>(&'a AppHandle);
+
+#[cfg(not(windows))]
+impl autostart::StartupRegistration for AppStartupRegistration<'_> {
+    type Snapshot = bool;
+
+    fn snapshot(&self) -> Result<Self::Snapshot, String> {
+        self.is_enabled()
+    }
+
+    fn restore(&self, snapshot: &Self::Snapshot) -> Result<(), String> {
+        if *snapshot {
+            self.enable()
+        } else {
+            self.disable()
+        }
+    }
+
+    fn is_enabled(&self) -> Result<bool, String> {
+        self.0
+            .autolaunch()
+            .is_enabled()
+            .map_err(|error| format!("Failed to check login startup: {error}"))
+    }
+
+    fn enable(&self) -> Result<(), String> {
+        self.0
+            .autolaunch()
+            .enable()
+            .map_err(|error| format!("Failed to enable login startup: {error}"))
+    }
+
+    fn disable(&self) -> Result<(), String> {
+        self.0
+            .autolaunch()
+            .disable()
+            .map_err(|error| format!("Failed to disable login startup: {error}"))
+    }
+}
+
+#[cfg(not(windows))]
+fn startup_registration(app: &AppHandle) -> Result<AppStartupRegistration<'_>, String> {
+    Ok(AppStartupRegistration(app))
+}
+
+#[cfg(windows)]
+fn startup_registration(app: &AppHandle) -> Result<autostart::WindowsStartupRegistration, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("Failed to locate login startup executable: {error}"))?;
+    autostart::WindowsStartupRegistration::new(&app.package_info().name, &executable)
+}
+
+pub(crate) fn reconcile_auto_start(app: &AppHandle) -> Result<(), String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "AppState not available".to_string())?;
+    let settings = state.settings.lock();
+    let requested = settings.auto_start;
+    autostart::reconcile_registration(requested, &startup_registration(app)?)
+}
 
 /// Cloud provider configuration for polish
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1024,6 +1089,29 @@ pub fn update_settings(
     key: String,
     value: serde_json::Value,
 ) -> Result<(), String> {
+    if key == "auto_start" {
+        let requested = value
+            .as_bool()
+            .ok_or_else(|| "Login startup setting must be a boolean".to_string())?;
+        let registration = startup_registration(&app)?;
+        let mut settings = state.settings.lock();
+        let mut proposed = settings.clone();
+        proposed.auto_start = requested;
+        let document = serde_json::to_string_pretty(&proposed)
+            .map_err(|error| format!("Failed to serialize settings: {error}"))?;
+        autostart::update_auto_start_with_persistence(
+            &mut settings.auto_start,
+            requested,
+            &registration,
+            || transfer::write_settings_atomically(&get_settings_path(), &document),
+        )?;
+        let updated = settings.clone();
+        drop(settings);
+        info!(key = %key, "settings_updated");
+        let _ = app.emit(EventName::SETTINGS_CHANGED, updated);
+        return Ok(());
+    }
+
     let mut should_clear_cache = false;
     let mut model_to_preload: Option<String> = None;
     let mut hotkey_to_register: Option<String> = None;
@@ -1080,11 +1168,6 @@ pub fn update_settings(
             "pill_indicator_mode" => {
                 if let Some(v) = value.as_str() {
                     settings.pill_indicator_mode = v.to_string();
-                }
-            }
-            "auto_start" => {
-                if let Some(v) = value.as_bool() {
-                    settings.auto_start = v;
                 }
             }
             "gpu_acceleration" => {

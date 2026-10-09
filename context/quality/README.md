@@ -22,7 +22,7 @@ Quality index tracking grades across all product domains. Grades are updated per
 
 | Domain | Layer | Grade | Last Verified | Notes |
 |--------|-------|-------|--------------|-------|
-| Audio Recording | Backend | B | 2026-04 | Manual testing, integration tests partial |
+| Audio Recording | Backend | D | 2026-10-09 | Reviewed stream/format/stop defects repaired with passing regressions; adjacent cloud-connection startup cleanup remains in [repair notes](windows-review-2026-10-09.md#repair-status) |
 | Audio Resampling | Backend | B | 2026-04 | Unit tests for sample rate conversion |
 | VAD (Voice Activity Detection) | Backend | C | 2026-04 | Build-verified only |
 | Local STT (Whisper) | Backend | B | 2026-04 | Integration tests, manual QA |
@@ -36,17 +36,17 @@ Quality index tracking grades across all product domains. Grades are updated per
 | Cloud Polish (Anthropic) | Backend | B | 2026-04 | Auth error tests |
 | Cloud Polish (OpenAI) | Backend | B | 2026-04 | Auth error tests |
 | Text Injection (macOS) | Backend | B | 2026-04 | Layer 0 + Layer 2 tested |
-| Text Injection (Windows) | Backend | D | 2026-04 | Not implemented |
+| Text Injection (Windows) | Backend | C | 2026-10-09 | Reviewed delivery/hook/key defects repaired; portable regressions pass, native target-app E2E pending ([evidence](windows-review-2026-10-09.md#repair-status)) |
 | Settings Persistence | Backend | B | 2026-04 | Unit tests |
-| History Storage | Backend | C | 2026-04 | Build-verified |
+| History Storage | Backend | C | 2026-10-09 | Failed-audio ownership/WAV regressions pass after repair; native device/provider retry QA pending ([evidence](windows-review-2026-10-09.md#repair-status)) |
 | UI Components | Frontend | C | 2026-04 | TypeScript compiles, no visual regression |
-| Settings UI | Frontend | B | 2026-04 | Manual QA, component tests |
+| Settings UI | Frontend | C | 2026-10-09 | Backend login registration and persistence rollback tested; Windows login-cycle QA pending ([evidence](windows-review-2026-10-09.md#repair-status)) |
 | Dashboard UI | Frontend | B | 2026-04 | Manual QA |
 | IPC Boundary | Full-stack | B | 2026-04 | Typed boundary, logging |
 | Logging Infrastructure | Full-stack | B | 2026-04 | Spec exists, partial coverage |
 | i18n | Frontend | A | 2026-04 | Automated check (pnpm check:i18n), 10 locales |
 | Website | Frontend | B | 2026-04 | Build passes, 2 locales |
-| CI/CD | Infrastructure | B | 2026-04 | Test + release + deploy pipelines |
+| CI/CD | Infrastructure | C | 2026-10-09 | Signature upload/manifest regressions pass; local signed build blocked by missing Developer ID identity ([evidence](windows-review-2026-10-09.md#repair-status)) |
 
 ## Mandatory Coverage Gates
 
@@ -60,8 +60,9 @@ These are hard requirements, not grades:
 
 Sorted by impact:
 
-1. Cloud STT contract tests for Qwen Omni, ElevenLabs, Deepgram (raise from C to B)
-2. VAD testing (raise from C to B)
-3. Text Injection Windows implementation (raise from D)
-4. History storage tests (raise from C to B)
-5. Visual regression for UI components (raise from C to B)
+1. Repair adjacent cloud-connection startup cleanup; verify native recording/retry lifecycle ([repair notes](windows-review-2026-10-09.md#repair-status))
+2. Verify repaired Windows text delivery in native target applications and exercise hooks ([repair notes](windows-review-2026-10-09.md#repair-status))
+3. Verify Windows login startup and restore Developer ID signing for the complete release build
+4. Cloud STT contract tests for Qwen Omni, ElevenLabs, Deepgram (raise from C to B)
+5. VAD testing (raise from C to B)
+6. Visual regression for UI components (raise from C to B)

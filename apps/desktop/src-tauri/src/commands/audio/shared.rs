@@ -40,11 +40,16 @@ const THINK_END_TAG: &str = "</think>";
 pub(crate) struct PolishPreviewHandle {
     pub callback: crate::polish_engine::PolishPreviewCallback,
     direct_stream_inserted: Arc<AtomicBool>,
+    delivery_error: Arc<ParkingMutex<Option<String>>>,
 }
 
 impl PolishPreviewHandle {
     pub(crate) fn direct_stream_inserted(&self) -> bool {
         self.direct_stream_inserted.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn delivery_error(&self) -> Option<String> {
+        self.delivery_error.lock().clone()
     }
 }
 
@@ -65,17 +70,25 @@ pub(crate) fn should_emit_error_recovery_idle(
 }
 
 pub(crate) async fn emit_recording_error_then_idle(app: &AppHandle, task_id: u64) {
+    emit_recording_error_with_tooltip_then_idle(app, task_id, TRANSCRIPTION_ERROR_TOOLTIP_MESSAGE)
+        .await;
+}
+
+async fn emit_recording_error_with_tooltip_then_idle(app: &AppHandle, task_id: u64, message: &str) {
+    if !app.state::<AppState>().is_current_recording_task(task_id) {
+        return;
+    }
     emit_recording_state(app, RecordingStatus::Error, task_id);
     emit_pill_tooltip(
         app,
-        TRANSCRIPTION_ERROR_TOOLTIP_MESSAGE,
+        message,
         PROCESSING_ERROR_TOOLTIP_DURATION_MS,
         Some(task_id),
     );
     tokio::time::sleep(tokio::time::Duration::from_millis(ERROR_STATE_SETTLE_MS)).await;
 
     let state = app.state::<AppState>();
-    let current_task_id = state.task_counter.load(Ordering::SeqCst);
+    let current_task_id = state.latest_recording_task_id();
     let is_recording = state.is_recording.load(Ordering::SeqCst);
     let is_transcribing = state.is_transcribing.load(Ordering::SeqCst);
     if !should_emit_error_recovery_idle(current_task_id, task_id, is_recording, is_transcribing) {
@@ -101,17 +114,34 @@ pub struct RecordingState {
 }
 
 pub(crate) async fn apply_finalize_result(app: &AppHandle, task_id: u64, result: FinalizeResult) {
+    if !app.state::<AppState>().is_current_recording_task(task_id) {
+        return;
+    }
     match result {
         FinalizeResult::DeliverText(text) => {
             emit_recording_complete(app, task_id, &text);
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            insert_text_with_metrics(
-                &text,
-                task_id,
-                "recording",
-                None,
-                crate::text_injector::insert_text,
-            );
+            {
+                let state = app.state::<AppState>();
+                if !state.is_current_recording_task(task_id)
+                    || state.is_cancellation_requested(task_id)
+                {
+                    return;
+                }
+            }
+            if let Err(error) =
+                insert_text_with_metrics(&text, task_id, "recording", None, |text| {
+                    crate::commands::text::do_insert_text(app, text)
+                })
+            {
+                emit_recording_error_with_tooltip_then_idle(
+                    app,
+                    task_id,
+                    &format!("Text delivery failed: {error}"),
+                )
+                .await;
+                return;
+            }
             let correction_memory_enabled = {
                 let state = app.state::<AppState>();
                 let settings = state.settings.lock();
@@ -146,6 +176,21 @@ pub(crate) async fn apply_finalize_result(app: &AppHandle, task_id: u64, result:
     }
 }
 
+pub(crate) async fn apply_stream_delivery_failure(
+    app: &AppHandle,
+    task_id: u64,
+    text: String,
+    error: String,
+) {
+    emit_recording_complete(app, task_id, &text);
+    emit_recording_error_with_tooltip_then_idle(
+        app,
+        task_id,
+        &format!("Text delivery failed: {error}"),
+    )
+    .await;
+}
+
 fn emit_recording_complete(app: &AppHandle, task_id: u64, text: &str) {
     let _ = app.emit(
         EventName::TRANSCRIPTION_COMPLETE,
@@ -154,20 +199,33 @@ fn emit_recording_complete(app: &AppHandle, task_id: u64, text: &str) {
             task_id,
         },
     );
-    emit_recording_state(app, RecordingStatus::Idle, task_id);
+    if app.state::<AppState>().is_current_recording_task(task_id) {
+        emit_recording_state(app, RecordingStatus::Idle, task_id);
+    }
 }
 
-pub(crate) async fn apply_retry_success(app: &AppHandle, entry_id: &str, task_id: u64, text: &str) {
+pub(crate) async fn apply_retry_success(
+    app: &AppHandle,
+    entry_id: &str,
+    task_id: u64,
+    text: &str,
+) -> Result<(), String> {
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    if let Err(error) = insert_text_with_metrics(text, task_id, "retry", Some(entry_id), |text| {
+        crate::commands::text::do_insert_text(app, text)
+    }) {
+        emit_retry_error(app, entry_id, task_id, &error);
+        emit_retry_state(app, entry_id, RetryStatus::Error, task_id);
+        emit_pill_tooltip(
+            app,
+            format!("Text delivery failed: {error}"),
+            PROCESSING_ERROR_TOOLTIP_DURATION_MS,
+            None,
+        );
+        return Err(error);
+    }
     emit_retry_complete(app, entry_id, task_id, text);
     emit_retry_state(app, entry_id, RetryStatus::Completed, task_id);
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    insert_text_with_metrics(
-        text,
-        task_id,
-        "retry",
-        Some(entry_id),
-        crate::text_injector::insert_text,
-    );
     let correction_memory_enabled = {
         let state = app.state::<AppState>();
         let settings = state.settings.lock();
@@ -176,6 +234,7 @@ pub(crate) async fn apply_retry_success(app: &AppHandle, entry_id: &str, task_id
     if correction_memory_enabled {
         crate::correction_learning::observe_post_delivery_edit(app.clone(), text.to_string());
     }
+    Ok(())
 }
 
 fn insert_text_with_metrics<F>(
@@ -184,12 +243,15 @@ fn insert_text_with_metrics<F>(
     context: &'static str,
     entry_id: Option<&str>,
     insert: F,
-) -> u64
+) -> Result<u64, String>
 where
-    F: FnOnce(&str),
+    F: FnOnce(&str) -> Result<(), String>,
 {
     let injection_started = Instant::now();
-    insert(text);
+    if let Err(error) = insert(text) {
+        warn!(task_id, context, error = %error, "text_injection_failed");
+        return Err(error);
+    }
     let injection_ms = injection_started.elapsed().as_millis() as u64;
     info!(
         task_id,
@@ -199,7 +261,7 @@ where
         injection_ms,
         "text_injection_completed"
     );
-    injection_ms
+    Ok(injection_ms)
 }
 
 pub(crate) fn apply_retry_error(app: &AppHandle, entry_id: &str, task_id: u64, error: &str) {
@@ -269,6 +331,8 @@ impl ProcessingEventTarget<'_> {
         let typed_visible_chars = Arc::new(ParkingMutex::new(0_usize));
         let direct_stream_inserted = Arc::new(AtomicBool::new(false));
         let callback_inserted = Arc::clone(&direct_stream_inserted);
+        let delivery_error = Arc::new(ParkingMutex::new(None));
+        let callback_error = Arc::clone(&delivery_error);
 
         let callback = Arc::new(move |update: crate::polish_engine::PolishPreviewUpdate| {
             if should_type_direct_stream_delta(direct_typing_enabled, update.is_final) {
@@ -278,6 +342,7 @@ impl ProcessingEventTarget<'_> {
                     &update.text,
                     &typed_visible_chars,
                     &callback_inserted,
+                    &callback_error,
                 );
             }
 
@@ -295,6 +360,7 @@ impl ProcessingEventTarget<'_> {
         Some(PolishPreviewHandle {
             callback,
             direct_stream_inserted,
+            delivery_error,
         })
     }
 
@@ -320,28 +386,58 @@ fn maybe_insert_direct_stream_delta(
     accumulated_text: &str,
     typed_visible_chars: &Arc<ParkingMutex<usize>>,
     direct_stream_inserted: &Arc<AtomicBool>,
+    delivery_error: &Arc<ParkingMutex<Option<String>>>,
 ) {
     let state = app.state::<AppState>();
-    if state.task_counter.load(Ordering::SeqCst) != task_id
-        || state.is_cancellation_requested(task_id)
-    {
+    if !state.is_current_recording_task(task_id) || state.is_cancellation_requested(task_id) {
         return;
     }
 
-    let mut typed_chars = typed_visible_chars.lock();
-    let Some(delta) = next_direct_stream_delta(accumulated_text, &mut typed_chars) else {
-        return;
-    };
-    drop(typed_chars);
-
-    insert_text_with_metrics(
-        &delta,
-        task_id,
-        "recording-polish-stream",
-        None,
-        crate::text_injector::insert_text,
+    let result = deliver_direct_stream_delta(
+        accumulated_text,
+        &mut typed_visible_chars.lock(),
+        &mut delivery_error.lock(),
+        |delta| {
+            insert_text_with_metrics(delta, task_id, "recording-polish-stream", None, |text| {
+                crate::commands::text::do_insert_text(app, text)
+            })
+            .map(|_| ())
+        },
     );
-    direct_stream_inserted.store(true, Ordering::SeqCst);
+    match result {
+        Ok(true) => direct_stream_inserted.store(true, Ordering::SeqCst),
+        Ok(false) => {}
+        Err(error) => emit_pill_tooltip(
+            app,
+            format!("Text delivery failed: {error}"),
+            PROCESSING_ERROR_TOOLTIP_DURATION_MS,
+            Some(task_id),
+        ),
+    }
+}
+
+fn deliver_direct_stream_delta<F>(
+    accumulated_text: &str,
+    typed_visible_chars: &mut usize,
+    delivery_error: &mut Option<String>,
+    insert: F,
+) -> Result<bool, String>
+where
+    F: FnOnce(&str) -> Result<(), String>,
+{
+    if delivery_error.is_some() {
+        return Ok(false);
+    }
+    let mut next_typed_chars = *typed_visible_chars;
+    let Some(delta) = next_direct_stream_delta(accumulated_text, &mut next_typed_chars) else {
+        return Ok(false);
+    };
+    if let Err(error) = insert(&delta) {
+        *delivery_error = Some(error.clone());
+        return Err(error);
+    }
+    *typed_visible_chars = next_typed_chars;
+    Ok(true)
 }
 
 fn should_type_direct_stream_delta(direct_typing_enabled: bool, is_final_update: bool) -> bool {
@@ -432,7 +528,9 @@ pub(crate) fn discard_canceled_result(state: &AppState, task_id: u64, audio_path
         }
     }
 
-    state.is_transcribing.store(false, Ordering::SeqCst);
+    if state.is_current_recording_task(task_id) {
+        state.is_transcribing.store(false, Ordering::SeqCst);
+    }
     let _ = state.finish_session(task_id);
     state.clear_cancellation(task_id);
 }
@@ -497,10 +595,11 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        insert_text_with_metrics, next_direct_stream_delta, polish_error_tooltip_message,
-        polish_preview_tooltip_message, should_type_direct_stream_delta,
-        LOCAL_POLISH_TIMEOUT_TOOLTIP_MESSAGE, POLISH_ERROR_TOOLTIP_MESSAGE,
-        POLISH_PREVIEW_MAX_CHARS, POLISH_PREVIEW_PENDING_TOOLTIP_MESSAGE,
+        deliver_direct_stream_delta, insert_text_with_metrics, next_direct_stream_delta,
+        polish_error_tooltip_message, polish_preview_tooltip_message,
+        should_type_direct_stream_delta, LOCAL_POLISH_TIMEOUT_TOOLTIP_MESSAGE,
+        POLISH_ERROR_TOOLTIP_MESSAGE, POLISH_PREVIEW_MAX_CHARS,
+        POLISH_PREVIEW_PENDING_TOOLTIP_MESSAGE,
     };
 
     #[test]
@@ -540,10 +639,72 @@ mod tests {
             insert_text_with_metrics("hello", 42, "test", Some("entry-1"), move |text| {
                 assert_eq!(text, "hello");
                 callback_called.store(true, Ordering::SeqCst);
-            });
+                Ok(())
+            })
+            .unwrap();
 
         assert!(called.load(Ordering::SeqCst));
         assert!(injection_ms < 1_000);
+    }
+
+    #[test]
+    fn insert_text_with_metrics_propagates_delivery_failure() {
+        let result = insert_text_with_metrics("hello", 42, "test", None, |_| {
+            Err("clipboard denied".to_string())
+        });
+        assert_eq!(result, Err("clipboard denied".to_string()));
+    }
+
+    #[test]
+    fn failed_stream_delivery_latches_error_and_never_retries() {
+        let mut typed_chars = 0;
+        let mut delivery_error = None;
+        assert_eq!(
+            deliver_direct_stream_delta(
+                "Hello world",
+                &mut typed_chars,
+                &mut delivery_error,
+                |_| { Err("paste blocked".to_string()) }
+            ),
+            Err("paste blocked".to_string())
+        );
+        assert_eq!(typed_chars, 0);
+        assert_eq!(delivery_error.as_deref(), Some("paste blocked"));
+        let mut attempted = false;
+        assert_eq!(
+            deliver_direct_stream_delta(
+                "Hello world again",
+                &mut typed_chars,
+                &mut delivery_error,
+                |_| {
+                    attempted = true;
+                    Ok(())
+                }
+            ),
+            Ok(false)
+        );
+        assert!(!attempted);
+        assert_eq!(typed_chars, 0);
+    }
+
+    #[test]
+    fn successful_stream_delivery_advances_prefix_once() {
+        let mut typed_chars = 0;
+        let mut delivery_error = None;
+        assert_eq!(
+            deliver_direct_stream_delta(
+                "Hello world",
+                &mut typed_chars,
+                &mut delivery_error,
+                |delta| {
+                    assert_eq!(delta, "Hello world");
+                    Ok(())
+                }
+            ),
+            Ok(true)
+        );
+        assert_eq!(typed_chars, 11);
+        assert!(delivery_error.is_none());
     }
 
     #[test]

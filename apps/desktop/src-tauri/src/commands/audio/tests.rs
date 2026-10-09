@@ -370,6 +370,7 @@ fn discarding_a_canceled_result_only_clears_that_task() {
     state.request_cancellation(5);
     state.request_cancellation(6);
     state.start_session(5, None);
+    state.task_counter.store(5, Ordering::SeqCst);
     state.is_transcribing.store(true, Ordering::SeqCst);
 
     discard_canceled_result(&state, 5, None);
@@ -378,4 +379,107 @@ fn discarding_a_canceled_result_only_clears_that_task() {
     assert!(state.is_cancellation_requested(6));
     assert!(!state.is_transcribing.load(Ordering::SeqCst));
     assert!(state.get_session_text(5).is_none());
+}
+
+fn buffered_recording_state(
+    task_id: u64,
+) -> (
+    crate::state::unified_state::StreamingSttState,
+    tokio::sync::mpsc::Receiver<Vec<i16>>,
+) {
+    let (audio_tx, audio_rx) = tokio::sync::mpsc::channel(1);
+    let streaming_state = crate::state::unified_state::StreamingSttState {
+        audio_tx,
+        accumulated_text: String::new(),
+        task_id,
+        streaming_task: Arc::new(ParkingMutex::new(None)),
+        chunk_buffer: Arc::new(ParkingMutex::new(Vec::new())),
+        processor: Arc::new(ParkingMutex::new(
+            crate::audio::stream_processor::StreamAudioProcessor::new("off", false, None),
+        )),
+        sample_rate: 16_000,
+        channels: 1,
+    };
+    (streaming_state, audio_rx)
+}
+
+#[tokio::test]
+async fn stopped_failed_recording_can_prepare_retry_from_its_original_audio() {
+    use crate::audio::wav_writer::{save_raw_audio_to_file, RecordedAudio};
+    use crate::history::models::TranscriptionEntry;
+    use crate::services::retry_transcription::prepare_retry_transcription;
+
+    let state = AppState::new();
+    let directory = tempfile::tempdir().unwrap();
+    let original_audio = RecordedAudio::new(
+        directory.path().join("original.wav"),
+        Arc::new(ParkingMutex::new(vec![1_000; 16_000])),
+        16_000,
+        1,
+    );
+    let (capture_state, mut audio_rx) = buffered_recording_state(7);
+    *state.streaming_stt.lock() = Some(capture_state);
+    drop(state.take_streaming_state(7));
+    assert_eq!(audio_rx.recv().await, None);
+
+    let (newer_capture, _newer_audio_rx) = buffered_recording_state(8);
+    *state.streaming_stt.lock() = Some(newer_capture);
+    state.start_session(8, None);
+    state.task_counter.store(8, Ordering::SeqCst);
+    let audio_path = save_raw_audio_to_file(&original_audio).unwrap();
+    let entry = TranscriptionEntry {
+        id: "failed-recording".to_string(),
+        created_at: 0,
+        raw_text: String::new(),
+        final_text: String::new(),
+        stt_engine: "whisper".to_string(),
+        stt_model: None,
+        language: Some("en-US".to_string()),
+        audio_duration_ms: Some(1_000),
+        stt_duration_ms: None,
+        polish_duration_ms: None,
+        total_duration_ms: None,
+        polish_applied: false,
+        polish_engine: None,
+        is_cloud: false,
+        audio_path: Some(audio_path.clone()),
+        status: "error".to_string(),
+        error: Some("network failed".to_string()),
+    };
+    let retry = prepare_retry_transcription(&state, entry.id.clone(), entry).unwrap();
+
+    assert_eq!(retry.audio_path, audio_path);
+    assert!(std::path::Path::new(&retry.audio_path).exists());
+    assert_eq!(state.streaming_stt.lock().as_ref().unwrap().task_id, 8);
+    assert!(state.is_current_recording_task(8));
+    assert_ne!(retry.task_id, 8);
+}
+
+#[test]
+fn older_stop_cannot_detach_a_newer_recording_consumer() {
+    let state = AppState::new();
+    let (capture_state, mut audio_rx) = buffered_recording_state(8);
+    *state.streaming_stt.lock() = Some(capture_state);
+
+    assert!(state.take_streaming_state(7).is_none());
+    assert_eq!(state.streaming_stt.lock().as_ref().unwrap().task_id, 8);
+    assert_eq!(
+        audio_rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    );
+}
+
+#[test]
+fn discarding_an_older_canceled_result_preserves_newer_activity() {
+    let state = AppState::new();
+    state.request_cancellation(5);
+    state.start_session(6, None);
+    state.task_counter.store(6, Ordering::SeqCst);
+    state.is_transcribing.store(true, Ordering::SeqCst);
+
+    discard_canceled_result(&state, 5, None);
+
+    assert!(state.is_transcribing.load(Ordering::SeqCst));
+    assert!(state.get_session_text(6).is_some());
+    assert!(!state.is_cancellation_requested(5));
 }

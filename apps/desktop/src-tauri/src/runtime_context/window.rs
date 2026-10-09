@@ -640,14 +640,13 @@ fn normalize_camel_noise_edges(term: &str) -> Option<String> {
     if is_common_context_word(last) {
         let candidate = if first.len() == 1 && first.chars().all(|c| c.is_ascii_uppercase()) {
             join_segments(term, &segments[1..segments.len() - 1])
-        } else if let Some(stripped_first) = strip_single_uppercase_noise_prefix(first) {
+        } else {
+            let stripped_first = strip_single_uppercase_noise_prefix(first)?;
             format!(
                 "{}{}",
                 stripped_first,
                 join_segments(term, &segments[1..segments.len() - 1])
             )
-        } else {
-            return None;
         };
 
         if candidate.chars().count() >= 6 && has_mixed_case(&candidate) {

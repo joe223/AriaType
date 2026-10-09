@@ -683,7 +683,7 @@ fn handle_runtime_event(
                 if let Some(app_state) = app_handle.try_state::<crate::state::app_state::AppState>()
                 {
                     if app_state.is_recording.load(Ordering::SeqCst) {
-                        let task_id = app_state.task_counter.load(Ordering::SeqCst);
+                        let task_id = app_state.latest_recording_task_id();
                         state.cancel_owner_task_id = Some(task_id);
                         let _ = refresh_matcher_snapshot(state);
                     }
@@ -1155,7 +1155,7 @@ fn handle_cancel_trigger(
     if let Some(app_state) = app_handle.try_state::<crate::state::app_state::AppState>() {
         let is_recording = app_state.is_recording.load(Ordering::SeqCst);
         let is_transcribing = app_state.is_transcribing.load(Ordering::SeqCst);
-        let task_id = app_state.task_counter.load(Ordering::SeqCst);
+        let task_id = app_state.latest_recording_task_id();
         *pending_cancel_release_owner_task_id =
             capture_cancel_hotkey_release_owner(is_recording, is_transcribing, task_id);
     }

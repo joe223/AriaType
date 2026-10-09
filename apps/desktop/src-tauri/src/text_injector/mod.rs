@@ -1,10 +1,13 @@
 pub trait TextInjector: Send + Sync {
     /// Insert `text` at the current cursor position.
     ///
-    /// `write_clipboard`: called only when the AX layer fails and a
-    ///   clipboard-based paste is needed. The caller supplies this closure so
-    ///   that the injector stays free of any Tauri / platform-clipboard dependency.
-    fn insert(&self, text: &str, write_clipboard: &dyn Fn());
+    /// `write_clipboard` writes the current text before a clipboard paste.
+    /// The caller supplies the fallible backend adapter.
+    fn insert(
+        &self,
+        text: &str,
+        write_clipboard: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), String>;
 }
 
 #[cfg(target_os = "macos")]
@@ -21,8 +24,12 @@ pub fn create_injector() -> Box<dyn TextInjector> {
     compile_error!("text_injector: unsupported platform");
 }
 
-pub fn insert_text(text: &str) {
-    let injector = create_injector();
-    // Clipboard handling is implemented inside the platform injector when needed.
-    injector.insert(text, &|| {});
+#[cfg(any(test, target_os = "windows"))]
+pub(crate) const WINDOWS_INPUT_EVENT_MARKER: usize = 0x4152_4941;
+
+pub fn insert_text(
+    text: &str,
+    write_clipboard: &dyn Fn() -> Result<(), String>,
+) -> Result<(), String> {
+    create_injector().insert(text, write_clipboard)
 }

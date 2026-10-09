@@ -239,6 +239,12 @@ pub fn run() {
             show_main_window_best_effort(app, "single_instance");
         }));
 
+    #[cfg(not(windows))]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        None,
+    ));
+
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
 
@@ -360,6 +366,10 @@ pub fn run() {
             let state = AppState::new();
             app.manage(state);
             tracing::info!("app_state_initialized");
+
+            if let Err(error) = settings::reconcile_auto_start(app.handle()) {
+                tracing::error!(error = %error, "login_startup_reconciliation_failed");
+            }
 
             // Initialize beep player with settings
             crate::audio::beep::init_beep_player();
@@ -785,10 +795,8 @@ pub fn run() {
             tauri::RunEvent::Reopen {
                 has_visible_windows,
                 ..
-            } => {
-                if should_show_main_window_on_reopen(has_visible_windows) {
-                    show_main_window_best_effort(app, "dock_reopen");
-                }
+            } if should_show_main_window_on_reopen(has_visible_windows) => {
+                show_main_window_best_effort(app, "dock_reopen");
             }
             _ => {}
         });

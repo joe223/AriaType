@@ -2,11 +2,12 @@ use tauri::{AppHandle, Manager, State};
 use tracing::{debug, info, instrument, warn};
 
 use crate::events::{emit_recording_state, RecordingStatus};
-use crate::services::recording_lifecycle::prepare_recording_stop;
+use crate::services::recording_lifecycle::{cleanup_failed_recording_stop, prepare_recording_stop};
 use crate::state::app_state::AppState;
 
 use super::shared::{
-    await_streaming_task_in_background, flush_pending_chunk_for_stop, send_flushed_chunk_for_stop,
+    await_streaming_task_in_background, emit_recording_error_then_idle,
+    flush_pending_chunk_for_stop, send_flushed_chunk_for_stop,
 };
 
 #[tauri::command]
@@ -28,9 +29,33 @@ pub fn stop_recording_sync(app: AppHandle) -> Result<Option<String>, String> {
         return Ok(None);
     };
 
-    {
-        let recorder = state.recorder.lock();
-        recorder.stop().map_err(|e| e.to_string())?;
+    let stop_result = state.recorder.lock().stop();
+    let streaming_state = state.take_streaming_state(prepared.task_id);
+    if let Err(error) = stop_result {
+        cleanup_failed_recording_stop(&state, prepared.task_id);
+        let streaming_task = streaming_state
+            .as_ref()
+            .and_then(|stt| stt.streaming_task.lock().take());
+        drop(streaming_state);
+        if let Some(handle) = &streaming_task {
+            handle.abort();
+        }
+        crate::commands::window::update_pill_visibility(&app);
+        tracing::error!(task_id = prepared.task_id, error = %error, "recorder_stop_failed");
+        let app_clone = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Some(handle) = streaming_task {
+                if let Err(error) = handle.await {
+                    tracing::debug!(task_id = prepared.task_id, error = %error, "failed_recording_consumer_stopped");
+                }
+            }
+            let state = app_clone.state::<AppState>();
+            state.clear_cancellation(prepared.task_id);
+            if state.is_current_recording_task(prepared.task_id) {
+                emit_recording_error_then_idle(&app_clone, prepared.task_id).await;
+            }
+        });
+        return Err(error);
     }
 
     {
@@ -45,7 +70,6 @@ pub fn stop_recording_sync(app: AppHandle) -> Result<Option<String>, String> {
         }
     }
 
-    let streaming_state = state.streaming_stt.lock().take();
     if let Some(stt) = streaming_state {
         if let Some(flushed_chunk) = flush_pending_chunk_for_stop(
             &stt.chunk_buffer,
@@ -75,7 +99,9 @@ pub fn stop_recording_sync(app: AppHandle) -> Result<Option<String>, String> {
             task_id = prepared.task_id,
             "streaming_state_missing-recording_interrupted"
         );
-        emit_recording_state(&app, RecordingStatus::Idle, prepared.task_id);
+        if state.is_current_recording_task(prepared.task_id) {
+            emit_recording_state(&app, RecordingStatus::Idle, prepared.task_id);
+        }
     }
 
     Ok(None)

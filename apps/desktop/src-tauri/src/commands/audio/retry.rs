@@ -119,7 +119,7 @@ pub async fn retry_transcription_internal(
                 "retry_transcription_completed"
             );
 
-            apply_retry_success(&app_clone, &entry_id, retry_task_id, &final_text).await;
+            apply_retry_success(&app_clone, &entry_id, retry_task_id, &final_text).await?;
 
             Ok(final_text)
         }

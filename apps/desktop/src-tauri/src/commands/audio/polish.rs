@@ -6,7 +6,7 @@ use crate::polish_engine::{get_template_by_id, DEFAULT_POLISH_PROMPT};
 use crate::state::app_state::AppState;
 
 use super::postprocess::strip_trailing_sentence_period;
-use super::shared::ProcessingEventTarget;
+use super::shared::{PolishPreviewHandle, ProcessingEventTarget};
 
 struct LocalPolishContext {
     system_prompt: String,
@@ -27,6 +27,7 @@ struct PolishAcceptContext {
 pub(super) struct PolishProcessingResult {
     pub text: String,
     pub direct_stream_inserted: bool,
+    pub delivery_error: Option<String>,
     pub polish_ms: u64,
     pub polish_wall_ms: u64,
     pub polish_queue_ms: u64,
@@ -45,6 +46,7 @@ impl PolishProcessingResult {
         Self {
             text,
             direct_stream_inserted: false,
+            delivery_error: None,
             polish_ms: 0,
             polish_wall_ms: 0,
             polish_queue_ms: 0,
@@ -58,6 +60,14 @@ impl PolishProcessingResult {
         }
     }
 
+    fn with_preview_delivery(mut self, handle: Option<&PolishPreviewHandle>) -> Self {
+        if let Some(handle) = handle {
+            self.direct_stream_inserted |= handle.direct_stream_inserted();
+            self.delivery_error = handle.delivery_error();
+        }
+        self
+    }
+
     fn from_polish_result(
         result: crate::polish_engine::PolishResult,
         polish_wall_ms: u64,
@@ -68,6 +78,7 @@ impl PolishProcessingResult {
         Self {
             text,
             direct_stream_inserted,
+            delivery_error: None,
             polish_ms: result.total_ms,
             polish_wall_ms,
             polish_queue_ms,
@@ -91,6 +102,7 @@ impl PolishProcessingResult {
         Self {
             text,
             direct_stream_inserted: false,
+            delivery_error: None,
             polish_ms: 0,
             polish_wall_ms,
             polish_queue_ms,
@@ -462,7 +474,7 @@ async fn run_local_polish(
                             LOCAL_POLISH_TIMEOUT_REASON,
                         )
                     }
-                }
+                }.with_preview_delivery(preview_handle.as_ref())
             } else {
                 let polish_queue_ms = elapsed_ms(polish_decision_started);
                 let failure_reason = "model is not downloaded";
@@ -670,7 +682,7 @@ pub(super) async fn maybe_polish_transcription_text(
                                     failure_reason,
                                 )
                             }
-                        };
+                        }.with_preview_delivery(preview_handle.as_ref());
                     }
                 }
 

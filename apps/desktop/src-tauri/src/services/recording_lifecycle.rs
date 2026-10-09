@@ -102,18 +102,33 @@ fn resolve_polish_template_from_profile(profile: &ShortcutProfile) -> Option<Str
 }
 
 pub fn prepare_recording_stop(state: &AppState) -> Option<PreparedRecordingStop> {
-    if !state.is_recording.load(Ordering::SeqCst) {
+    let task_id = state.latest_recording_task_id();
+    if !state.is_recording.swap(false, Ordering::SeqCst) {
         return None;
     }
-
-    let task_id = state.task_counter.load(Ordering::SeqCst);
-    state.is_recording.store(false, Ordering::SeqCst);
 
     if let Some(tx) = state.level_monitor_tx.lock().as_ref() {
         let _ = tx.send(false);
     }
 
     Some(PreparedRecordingStop { task_id })
+}
+
+pub fn finish_recording_processing(state: &AppState, task_id: u64) {
+    if state.is_current_recording_task(task_id) {
+        state.is_transcribing.store(false, Ordering::SeqCst);
+    }
+    let _ = state.finish_session(task_id);
+}
+
+pub fn cleanup_failed_recording_stop(state: &AppState, task_id: u64) {
+    state.request_cancellation(task_id);
+    let _ = state.finish_session(task_id);
+    if state.is_current_recording_task(task_id) {
+        state.is_recording.store(false, Ordering::SeqCst);
+        state.is_transcribing.store(false, Ordering::SeqCst);
+        state.recording_start_time.store(0, Ordering::SeqCst);
+    }
 }
 
 pub fn prepare_recording_cancellation(state: &AppState) -> Option<PreparedRecordingCancellation> {
@@ -124,7 +139,7 @@ pub fn prepare_recording_cancellation(state: &AppState) -> Option<PreparedRecord
         return None;
     }
 
-    let task_id = state.task_counter.load(Ordering::SeqCst);
+    let task_id = state.latest_recording_task_id();
     state.request_cancellation(task_id);
     state.is_recording.store(false, Ordering::SeqCst);
     state.is_transcribing.store(false, Ordering::SeqCst);
@@ -133,7 +148,7 @@ pub fn prepare_recording_cancellation(state: &AppState) -> Option<PreparedRecord
         let _ = tx.send(false);
     }
 
-    state.clear_session();
+    let _ = state.finish_session(task_id);
 
     Some(PreparedRecordingCancellation {
         task_id,
@@ -144,6 +159,7 @@ pub fn prepare_recording_cancellation(state: &AppState) -> Option<PreparedRecord
 #[cfg(test)]
 mod tests {
     use super::{
+        allocate_task_id, cleanup_failed_recording_stop, finish_recording_processing,
         prepare_recording_cancellation, prepare_recording_start, prepare_recording_stop,
         RecordingStartGuard,
     };
@@ -152,6 +168,85 @@ mod tests {
     use crate::state::app_state::AppState;
     use std::sync::atomic::Ordering;
     use std::sync::mpsc::TryRecvError;
+
+    #[test]
+    fn finished_processing_is_idle_before_result_delivery_or_error_recovery() {
+        let state = AppState::new();
+        state.start_session(7, None);
+        state.is_transcribing.store(true, Ordering::SeqCst);
+
+        finish_recording_processing(&state, 7);
+
+        assert!(!state.is_transcribing.load(Ordering::SeqCst));
+        assert!(state.get_session_text(7).is_none());
+        assert!(state.is_current_recording_task(7));
+    }
+
+    #[test]
+    fn older_processing_completion_preserves_the_newer_recording() {
+        let state = AppState::new();
+        state.start_session(8, None);
+        state.is_transcribing.store(true, Ordering::SeqCst);
+
+        finish_recording_processing(&state, 7);
+
+        assert!(state.is_transcribing.load(Ordering::SeqCst));
+        assert!(state.get_session_text(8).is_some());
+    }
+
+    #[test]
+    fn unrelated_retry_task_id_does_not_orphan_recording_stop_or_cancel() {
+        let state = AppState::new();
+        let recording = prepare_recording_start(&state, None);
+        state.is_recording.store(true, Ordering::SeqCst);
+        let retry_task_id = allocate_task_id(&state);
+        assert_ne!(retry_task_id, recording.task_id);
+
+        let stopped = prepare_recording_stop(&state).unwrap();
+        assert_eq!(stopped.task_id, recording.task_id);
+
+        state.is_recording.store(true, Ordering::SeqCst);
+        let canceled = prepare_recording_cancellation(&state).unwrap();
+        assert_eq!(canceled.task_id, recording.task_id);
+        assert!(state.is_cancellation_requested(recording.task_id));
+        assert!(!state.is_cancellation_requested(retry_task_id));
+    }
+
+    #[test]
+    fn failed_stop_cleans_up_activity_and_marks_only_its_task_canceled() {
+        let state = AppState::new();
+        state.task_counter.store(7, Ordering::SeqCst);
+        state.start_session(7, None);
+        state.is_recording.store(true, Ordering::SeqCst);
+        state.is_transcribing.store(true, Ordering::SeqCst);
+        state.recording_start_time.store(123, Ordering::SeqCst);
+        prepare_recording_stop(&state).unwrap();
+
+        cleanup_failed_recording_stop(&state, 7);
+
+        assert!(!state.is_recording.load(Ordering::SeqCst));
+        assert!(!state.is_transcribing.load(Ordering::SeqCst));
+        assert_eq!(state.recording_start_time.load(Ordering::SeqCst), 0);
+        assert!(state.get_session_text(7).is_none());
+        assert!(state.is_cancellation_requested(7));
+        assert!(!state.is_cancellation_requested(8));
+    }
+
+    #[test]
+    fn failed_older_stop_preserves_a_new_recording() {
+        let state = AppState::new();
+        state.task_counter.store(8, Ordering::SeqCst);
+        state.start_session(8, None);
+        state.is_recording.store(true, Ordering::SeqCst);
+        state.recording_start_time.store(123, Ordering::SeqCst);
+
+        cleanup_failed_recording_stop(&state, 7);
+
+        assert!(state.is_recording.load(Ordering::SeqCst));
+        assert_eq!(state.recording_start_time.load(Ordering::SeqCst), 123);
+        assert!(state.get_session_text(8).is_some());
+        assert!(state.is_cancellation_requested(7));
+    }
 
     #[test]
     fn prepare_recording_start_captures_settings_and_starts_session() {

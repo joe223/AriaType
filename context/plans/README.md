@@ -33,6 +33,7 @@ A plan is only completed when all implementation units are closed, verification 
 |------|------|------|--------|
 | [Logging Standardization](./active/2026-04-03-001-fix-logging-standardization-plan.md) | fix | 2026-04-03 | Active |
 | [Multi-Shortcut Profiles](./active/2026-04-20-001-feat-multi-shortcut-profiles-plan.md) | feat | 2026-04-20 | Active |
+| [Repair Windows Platform Review Findings](./active/2026-10-09-001-fix-windows-stability.md) | fix | 2026-10-09 | Active |
 
 ## Completed Plans
 
